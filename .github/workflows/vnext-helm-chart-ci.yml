@@ -256,6 +256,23 @@ jobs:
           helm push .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz \
             oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
 
+      - name: Generate release metadata
+        run: |
+          cat > .helm-packages/metadata.json <<EOF
+          {
+            "chartName": "${{ env.CHART_NAME }}",
+            "chartVersion": "${{ steps.chart_version.outputs.version }}",
+            "previousChartVersion": "${{ steps.chart_version.outputs.previous }}",
+            "appVersion": "${{ steps.app_version.outputs.version }}",
+            "appVersionChanged": ${{ steps.app_version.outputs.changed }},
+            "bumpType": "${{ steps.bump.outputs.type }}",
+            "trigger": "${{ github.event_name }}",
+            "registry": "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -293,6 +310,7 @@ jobs:
             ```
           files: |
             .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz
+            .helm-packages/metadata.json
           generate_release_notes: true
           make_latest: true
         env:
