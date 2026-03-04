@@ -1,0 +1,191 @@
+{{- if and .Values.tls.enabled (not .Values.tls.certificateSecret) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-tls-cert-gen
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tls-cert-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "redis-sentinel.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tls-cert-generator
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "redis-sentinel.serviceAccountName" . }}
+      {{- if .Values.openshift.enabled }}
+      {{- with .Values.securityContext.openshift }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- else }}
+      {{- with .Values.securityContext.kubernetes }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+      - name: cert-generator
+        image: quay.io/openshift/origin-cli:latest
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        command:
+          - sh
+          - -c
+          - |
+            set -e
+            
+            echo "============================================"
+            echo "Redis Sentinel TLS Certificate Generator"
+            echo "============================================"
+            echo ""
+            
+            NAMESPACE="{{ .Release.Namespace }}"
+            SECRET_NAME="{{ include "redis-sentinel.fullname" . }}-tls"
+            
+            # Check if secret already exists
+            if kubectl get secret $SECRET_NAME -n $NAMESPACE >/dev/null 2>&1; then
+              echo "✓ TLS secret already exists: $SECRET_NAME"
+              echo ""
+              echo "Certificate details:"
+              kubectl get secret $SECRET_NAME -n $NAMESPACE -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -dates 2>/dev/null || echo "  (Unable to read certificate)"
+              echo ""
+              echo "Skipping certificate generation."
+              echo "To renew certificates, set tls.renewCertificates: true and run helm upgrade"
+              exit 0
+            fi
+            
+            echo "TLS secret not found - generating new certificates..."
+            echo "(OpenShift origin-cli image - openssl + kubectl pre-installed)"
+            echo ""
+            
+            CERT_DIR="/tmp/certs"
+            mkdir -p $CERT_DIR
+            cd $CERT_DIR
+            
+            # Certificate settings from values.yaml
+            EXPIRY_DAYS={{ .Values.tls.certificate.expiryDays }}
+            SUBJECT_COUNTRY="{{ .Values.tls.certificate.subject.country }}"
+            SUBJECT_STATE="{{ .Values.tls.certificate.subject.state }}"
+            SUBJECT_LOCALITY="{{ .Values.tls.certificate.subject.locality }}"
+            SUBJECT_ORG="{{ .Values.tls.certificate.subject.organization }}"
+            SUBJECT_OU="{{ .Values.tls.certificate.subject.organizationalUnit }}"
+            SUBJECT_CN="{{ .Values.tls.certificate.subject.commonName }}"
+            SERVICE_NAME="{{ include "redis-sentinel.fullname" . }}"
+            HEADLESS_SERVICE="{{ include "redis-sentinel.headlessServiceName" . }}"
+            
+            echo "Generating certificates with ${EXPIRY_DAYS} days validity"
+            echo ""
+            
+            # Step 1: Generate CA private key
+            echo "[1/5] Generating CA private key..."
+            openssl genrsa -out ca.key 4096
+            
+            # Step 2: Generate CA certificate
+            echo "[2/5] Generating CA certificate..."
+            openssl req -x509 -new -nodes -sha256 \
+              -key ca.key \
+              -days $EXPIRY_DAYS \
+              -subj "/C=$SUBJECT_COUNTRY/ST=$SUBJECT_STATE/L=$SUBJECT_LOCALITY/O=$SUBJECT_ORG/OU=$SUBJECT_OU/CN=$SUBJECT_CN-ca" \
+              -out ca.crt
+            
+            # Step 3: Generate server private key
+            echo "[3/5] Generating server private key..."
+            openssl genrsa -out redis.key 4096
+            
+            # Step 4: Create OpenSSL configuration for SAN
+            echo "[4/5] Creating certificate signing request with SANs..."
+            cat > openssl.cnf <<EOF
+            [req]
+            default_bits = 4096
+            prompt = no
+            default_md = sha256
+            distinguished_name = dn
+            req_extensions = v3_req
+
+            [dn]
+            C=$SUBJECT_COUNTRY
+            ST=$SUBJECT_STATE
+            L=$SUBJECT_LOCALITY
+            O=$SUBJECT_ORG
+            OU=$SUBJECT_OU
+            CN=$SUBJECT_CN
+
+            [v3_req]
+            subjectAltName = @alt_names
+
+            [alt_names]
+            DNS.1 = localhost
+            DNS.2 = *.${HEADLESS_SERVICE}
+            DNS.3 = *.${HEADLESS_SERVICE}.${NAMESPACE}
+            DNS.4 = *.${HEADLESS_SERVICE}.${NAMESPACE}.svc
+            DNS.5 = *.${HEADLESS_SERVICE}.${NAMESPACE}.svc.cluster.local
+            DNS.6 = ${SERVICE_NAME}
+            DNS.7 = ${SERVICE_NAME}.${NAMESPACE}
+            DNS.8 = ${SERVICE_NAME}.${NAMESPACE}.svc
+            DNS.9 = ${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local
+            {{- range $i, $san := .Values.tls.certificate.additionalSANs }}
+            DNS.{{ add $i 10 }} = {{ $san }}
+            {{- end }}
+            IP.1 = 127.0.0.1
+            EOF
+            
+            # Generate CSR
+            openssl req -new -key redis.key -out redis.csr -config openssl.cnf
+            
+            # Step 5: Sign server certificate with CA
+            echo "[5/5] Signing server certificate..."
+            openssl x509 -req -in redis.csr \
+              -CA ca.crt -CAkey ca.key -CAcreateserial \
+              -out redis.crt \
+              -days $EXPIRY_DAYS \
+              -sha256 \
+              -extensions v3_req \
+              -extfile openssl.cnf
+            
+            echo ""
+            echo "Certificate generation completed!"
+            echo ""
+            echo "Certificate details:"
+            openssl x509 -in redis.crt -noout -text | grep -A 1 "Subject:"
+            openssl x509 -in redis.crt -noout -text | grep -A 1 "Validity"
+            openssl x509 -in redis.crt -noout -text | grep -A 20 "Subject Alternative Name"
+            echo ""
+            
+            # Create Kubernetes secret with certificates
+            echo "Creating Kubernetes secret..."
+            kubectl create secret generic {{ include "redis-sentinel.fullname" . }}-tls \
+              --from-file=ca.crt=ca.crt \
+              --from-file=tls.crt=redis.crt \
+              --from-file=tls.key=redis.key \
+              --namespace=$NAMESPACE \
+              --dry-run=client -o yaml | \
+            kubectl label --local -f - \
+              app.kubernetes.io/name={{ include "redis-sentinel.name" . }} \
+              app.kubernetes.io/instance={{ .Release.Name }} \
+              app.kubernetes.io/managed-by={{ .Release.Service }} \
+              helm.sh/chart={{ include "redis-sentinel.chart" . }} \
+              -o yaml | \
+            kubectl apply -f -
+            
+            echo ""
+            echo "✓ TLS certificates successfully created and stored in secret: {{ include "redis-sentinel.fullname" . }}-tls"
+            echo "✓ Certificate validity: $EXPIRY_DAYS days"
+{{- end }}
+

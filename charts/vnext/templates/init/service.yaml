@@ -1,0 +1,17 @@
+{{- if .Values.orchestrator.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-orchestrator-initializer
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "orchestrator-initializer") | nindent 4 }}
+spec:
+  type: {{ .Values.orchestrator.initializer.service.type }}
+  ports:
+    - port: {{ .Values.orchestrator.initializer.service.port }}
+      targetPort: {{ .Values.orchestrator.initializer.service.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "orchestrator-initializer") | nindent 4 }}
+{{- end }}

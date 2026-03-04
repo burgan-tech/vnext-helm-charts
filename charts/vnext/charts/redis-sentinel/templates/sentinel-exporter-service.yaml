@@ -1,0 +1,20 @@
+{{- if .Values.sentinelExporter.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-sentinel-exporter
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel-exporter
+spec:
+  type: ClusterIP
+  ports:
+  - name: http-metrics
+    port: {{ .Values.sentinelExporter.port }}
+    targetPort: exporter-port
+    protocol: TCP
+  selector:
+    {{- include "redis-sentinel.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel-exporter
+{{- end }}
+

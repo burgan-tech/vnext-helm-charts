@@ -1,0 +1,9 @@
+# Redis Sentinel client with TLS support
+# Compatible with Redis 7.4.1-alpine
+
+# Redis client with Sentinel support
+redis[hiredis]==5.0.1
+
+# Optional: Better performance with hiredis parser
+hiredis==2.3.2
+

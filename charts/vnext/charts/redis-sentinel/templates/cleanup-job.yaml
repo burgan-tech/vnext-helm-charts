@@ -1,0 +1,99 @@
+{{- if and .Values.tls.enabled (not .Values.tls.certificateSecret) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-cleanup
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cleanup
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "redis-sentinel.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cleanup
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "redis-sentinel.serviceAccountName" . }}
+      {{- if .Values.openshift.enabled }}
+      {{- with .Values.securityContext.openshift }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- else }}
+      {{- with .Values.securityContext.kubernetes }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+      - name: cleanup
+        image: quay.io/openshift/origin-cli:latest
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            set -e
+            
+            echo "============================================"
+            echo "Redis Sentinel Cleanup Job"
+            echo "============================================"
+            echo ""
+            echo "Cleaning up resources created outside Helm tracking..."
+            echo ""
+            
+            NAMESPACE="{{ .Release.Namespace }}"
+            RELEASE_NAME="{{ .Release.Name }}"
+            
+            {{- if and .Values.tls.enabled (not .Values.tls.certificateSecret) }}
+            # Clean up TLS secret created by cert generation job
+            echo "Checking for TLS secret..."
+            if kubectl get secret {{ include "redis-sentinel.fullname" . }}-tls -n $NAMESPACE 2>/dev/null; then
+              echo "Deleting TLS secret: {{ include "redis-sentinel.fullname" . }}-tls"
+              kubectl delete secret {{ include "redis-sentinel.fullname" . }}-tls -n $NAMESPACE --ignore-not-found=true
+              echo "✓ TLS secret deleted"
+            else
+              echo "TLS secret not found (already deleted or using existing secret)"
+            fi
+            echo ""
+            {{- end }}
+            
+            # Note: External access services are managed by Helm and will be automatically deleted
+            
+            echo "============================================"
+            echo "✓ Cleanup completed successfully"
+            echo "============================================"
+            echo ""
+            echo "Note: The following resources are intentionally kept:"
+            echo "  - Password secret ({{ include "redis-sentinel.fullname" . }})"
+            echo "  - PVCs (data-{{ include "redis-sentinel.fullname" . }}-*)"
+            echo ""
+            echo "To manually delete these resources, run:"
+            echo "  kubectl delete secret {{ include "redis-sentinel.fullname" . }} -n $NAMESPACE"
+            echo "  kubectl delete pvc -l app.kubernetes.io/instance=$RELEASE_NAME -n $NAMESPACE"
+            echo ""
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+{{- end }}
+

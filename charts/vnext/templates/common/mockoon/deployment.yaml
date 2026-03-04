@@ -1,0 +1,45 @@
+{{ if .Values.mockoon.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-mockoon
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: mockoon
+spec:
+  replicas: {{ .Values.mockoon.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vnext.labels" . | nindent 6 }}
+      app: mockoon
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.labels" . | nindent 8 }}
+        app: mockoon
+    spec:
+      containers:
+        - name: {{ include "vnext.fullname" . }}-mockoon
+          image: {{ .Values.mockoon.image.registry }}/{{ .Values.mockoon.image.repository }}:{{ .Values.mockoon.image.tag }}
+          imagePullPolicy: {{ .Values.mockoon.image.imagePullPolicy }}
+          args: {{- toYaml .Values.mockoon.args | nindent 12 }}
+          ports:
+            - containerPort: 3001
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /data/migration-api.json
+              subPath: migration-api.json
+              readOnly: true
+          livenessProbe:
+            {{- toYaml .Values.mockoon.livenessProbe | nindent 12 }}
+
+          readinessProbe:
+            {{- toYaml .Values.mockoon.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.mockoon.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vnext.fullname" . }}-mockoon-config
+{{- end -}}

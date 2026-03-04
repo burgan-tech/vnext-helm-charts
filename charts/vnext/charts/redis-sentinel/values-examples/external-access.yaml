@@ -1,0 +1,136 @@
+# Redis Sentinel with External Access (no TLS)
+# This configuration enables external access via LoadBalancer services
+
+# OpenShift compatibility
+openshift:
+  enabled: true
+
+replicaCount: 3
+
+image:
+  repository: redis
+  pullPolicy: IfNotPresent
+  tag: "8.2.2-alpine"
+
+# Authentication
+auth:
+  # Use existing secret for passwords (recommended for production)
+  # 
+  # IMPORTANT: Secret must exist in the same namespace as this release
+  # Example:
+  #   kubectl create secret generic my-redis-secret \
+  #     --from-literal=redis-password='my-redis-pass' \
+  #     --from-literal=sentinel-password='my-sentinel-pass' \
+  #     --namespace=my-namespace
+  existingSecret: ""
+  redis:
+    passwordKey: "redis-password"
+  sentinel:
+    passwordKey: "sentinel-password"
+
+# Redis configuration
+redis:
+  password: ""  # Auto-generate
+  port: 6379
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""  # Leave empty to use default storage class
+    accessMode: ReadWriteOnce
+  # CRITICAL: Set maxMemory to 80-90% of pod limit (3Gi = 3221MB)
+  # Using 2560mb = 2.5GB = 78% of pod limit
+  maxMemory: "2560mb"
+  maxMemoryPolicy: "noeviction"
+  appendonly: true
+  extraConfig: |
+    tcp-keepalive 60
+    timeout 0
+
+# TLS/SSL configuration - disabled for external access without TLS
+tls:
+  enabled: false
+
+# Sentinel configuration
+sentinel:
+  password: ""  # Auto-generate
+  port: 26379
+  quorum: 2
+  downAfterMilliseconds: 30000
+  failoverTimeout: 180000
+  parallelSyncs: 1
+  extraConfig: |
+
+# Service configuration
+service:
+  type: ClusterIP
+  redis:
+    port: 6379
+    nodePort: ""
+  sentinel:
+    port: 26379
+    nodePort: ""
+  annotations: {}
+
+# External access configuration
+externalAccess:
+  enabled: true
+  
+  service:
+    type: LoadBalancer
+    redisPort: 6379
+    sentinelPort: 26379
+    
+    # IMPORTANT: Configure one IP per pod
+    # Replace with your actual LoadBalancer IPs
+    loadBalancerIPs:
+      - "10.1.2.11"
+      - "10.1.2.12"
+      - "10.1.2.13"
+    
+    # MetalLB configuration example
+    annotations:
+      metallb.universe.tf/address-pool: addresspool-redis
+    
+    labels: {}
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: Cluster
+  
+  restartJob:
+    helmHookTimeout: "20m"
+    podReadyTimeout: 300
+    delayBetweenPods: 10
+
+# Resource limits
+resources:
+  redis:
+    limits:
+      cpu: 1000m
+      memory: 3Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  sentinel:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Pod anti-affinity
+# Pod anti-affinity configuration
+# Leave as {} to use default soft anti-affinity with matchLabels
+# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+affinity: {}
+
+# Metrics
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+

@@ -1,0 +1,12 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "vnext.fullname" . }}-notification-binding
+spec:
+  type: bindings.http
+  version: v1
+  metadata:
+    - name: url
+      value: {{ .Values.execution.notificationBinding.url | default (printf "http://%s-mockoon:3001/api/notification/send" (include "vnext.fullname" .)) | quote }}
+scopes:
+- {{ .Values.execution.dapr.appId | default (printf "vnext-%s-execution-app" .Values.global.appDomain) | quote }}

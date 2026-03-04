@@ -1,0 +1,50 @@
+{{- if .Values.orchestrator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-orchestrator-initializer
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "orchestrator-initializer") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "orchestrator-initializer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "orchestrator-initializer") | nindent 8 }}
+    spec:
+      initContainers:
+        - name: orchestrator-checker
+          image: "alpine/curl:latest"
+          imagePullPolicy: {{ .Values.orchestrator.initializer.image.pullPolicy }}
+          env:
+            - name: VNEXT_APP_URL
+              value: "http://{{ include "vnext.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Checking services..."
+              while ! (curl -s $VNEXT_APP_URL/health | grep -qi '"status":"Healthy"'); do echo "Orchestrator DOWN" && sleep 10 ; done && echo "Orchestrator UP"
+      containers:
+        - name: orchestrator-initializer
+          image: "{{ .Values.orchestrator.initializer.image.repository }}:{{ .Values.orchestrator.initializer.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.orchestrator.initializer.image.pullPolicy }}
+          env:
+            - name: VNEXT_APP_URL
+              value: "http://{{ include "vnext.fullname" . }}-orchestrator:5000"
+            - name: APP_DOMAIN
+              value: "{{ .Values.global.appDomain }}"
+            - name: PACKAGE_API_PORT
+              value: "{{ .Values.orchestrator.initializer.service.port }}"
+            - name: NPM_REGISTRY
+              value: "{{ .Values.orchestrator.initializer.envConfig.NPM_REGISTRY }}"
+          volumeMounts:
+            - name: npm-cache
+              mountPath: /app/.npm-cache
+      volumes:
+        - name: npm-cache
+          emptyDir: {}
+{{- end }}

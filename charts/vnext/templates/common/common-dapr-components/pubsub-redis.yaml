@@ -1,0 +1,16 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "vnext.fullname" . }}-pubsub
+spec:
+  type: pubsub.redis
+  version: v1
+  metadata:
+  - name: redisHost
+    value: {{ default (printf "%s-redis-sentinel-headless:6379" (include "vnext.fullname" .)) .Values.global.externalRedis.endpoint | quote }}
+  - name: redisPassword
+    secretKeyRef:
+      name: workflow-secret
+      key: redis-password
+auth:
+  secretStore: {{ include "vnext.fullname" . }}-secret

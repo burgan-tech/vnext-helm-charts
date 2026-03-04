@@ -1,0 +1,14 @@
+{{- if and .Values.vault.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "vnext.fullname" . }}-vault-initializer-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "vnext.fullname" . }}-vault-initializer-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "vnext.fullname" . }}-vault-initializer
+    namespace: {{ .Release.Namespace }}
+{{- end }}

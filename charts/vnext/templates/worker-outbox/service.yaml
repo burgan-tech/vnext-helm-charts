@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-worker-outbox
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-outbox
+spec:
+  type: {{ index .Values "worker-outbox" "service" "type" }}
+  ports:
+    - port: {{ index .Values "worker-outbox" "service" "port" }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "vnext.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-outbox

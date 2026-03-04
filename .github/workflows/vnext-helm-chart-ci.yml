@@ -1,0 +1,299 @@
+name: Helm Chart CI/CD
+
+# ==============================================================================
+# Triggers:
+#   1. push/PR      → chart dosyaları değiştiğinde (lint + release)
+#   2. dispatch      → burgan-tech/vnext yeni release çıktığında (appVersion güncelle + release)
+#   3. workflow_dispatch → manuel tetikleme (versiyon tipi seçilebilir)
+#
+# Semantic Versioning:
+#   - patch (varsayılan): her push ve app-release'de otomatik artar
+#   - minor/major: sadece workflow_dispatch ile manuel seçilebilir
+#
+# Cross-repo Trigger Kurulumu:
+#   burgan-tech/vnext repo'sunun release workflow'una şu step eklenmeli:
+#
+#   - name: Trigger Helm Chart Release
+#     uses: peter-evans/repository-dispatch@v3
+#     with:
+#       token: ${{ secrets.HELM_CHARTS_PAT }}
+#       repository: burgan-tech/vnext-helm-charts
+#       event-type: app-release
+#       client-payload: '{"app_version": "${{ github.event.release.tag_name }}"}'
+#
+#   Not: HELM_CHARTS_PAT, vnext-helm-charts repo'suna yazma yetkisi olan bir PAT olmalıdır.
+# ==============================================================================
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "charts/vnext/**"
+      - "!charts/vnext/docs/**"
+      - "!charts/vnext/Dockerfile"
+      - "!charts/vnext/.helmignore"
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "charts/vnext/**"
+      - "!charts/vnext/docs/**"
+      - "!charts/vnext/Dockerfile"
+      - "!charts/vnext/.helmignore"
+  repository_dispatch:
+    types: [app-release]
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "New appVersion from vnext release (e.g. 0.0.39). Leave empty to keep current."
+        required: false
+        type: string
+      version_bump:
+        description: "Chart version bump type"
+        required: false
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: helm-chart-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  CHART_PATH: charts/vnext
+  CHART_NAME: vnext
+
+jobs:
+  lint:
+    name: Lint & Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Add dependency repositories
+        run: |
+          helm repo add dapr https://dapr.github.io/helm-charts/
+          helm repo add hashicorp https://helm.releases.hashicorp.com
+          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART_PATH }}
+
+      - name: Lint chart
+        run: helm lint ${{ env.CHART_PATH }} --strict
+
+      - name: Validate templates (default)
+        run: |
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext \
+            --debug > /dev/null
+
+      - name: Validate templates (external services)
+        run: |
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext \
+            --set vault.enabled=false \
+            --set global.externalVault.enabled=true \
+            --set global.externalVault.address="https://vault.example.com:8200" \
+            --set redis-sentinel.enabled=false \
+            --set global.externalRedis.endpoint="redis.example.com:6379" \
+            --set opentelemetry-collector.enabled=false \
+            --set global.telemetry.external.enabled=true \
+            --set global.telemetry.external.endpoint="http://otel.example.com:4317" \
+            --debug > /dev/null
+
+      - name: Validate templates (dev tools enabled)
+        run: |
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext \
+            --set pgAdmin.enabled=true \
+            --set redisInsight.enabled=true \
+            --set mockoon.enabled=true \
+            --set openobserve.enabled=true \
+            --debug > /dev/null
+
+  release:
+    name: Version Bump, Package & Publish
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Determine version bump type
+        id: bump
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "type=${{ github.event.inputs.version_bump }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve appVersion
+        id: app_version
+        run: |
+          CURRENT=$(grep '^appVersion:' ${{ env.CHART_PATH }}/Chart.yaml | awk '{print $2}' | tr -d '"')
+
+          NEW_APP_VERSION=""
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            NEW_APP_VERSION="${{ github.event.client_payload.app_version }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            NEW_APP_VERSION="${{ github.event.inputs.app_version }}"
+          fi
+
+          # Strip leading 'v' prefix if present (vnext tags are v0.0.38 format)
+          NEW_APP_VERSION="${NEW_APP_VERSION#v}"
+
+          if [[ -n "$NEW_APP_VERSION" ]]; then
+            echo "version=$NEW_APP_VERSION" >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "appVersion: $CURRENT → $NEW_APP_VERSION"
+          else
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "appVersion: $CURRENT (unchanged)"
+          fi
+
+      - name: Bump chart version (semantic)
+        id: chart_version
+        run: |
+          CURRENT=$(grep '^version:' ${{ env.CHART_PATH }}/Chart.yaml | awk '{print $2}')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          BUMP_TYPE="${{ steps.bump.outputs.type }}"
+          case "$BUMP_TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "previous=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Chart version: $CURRENT → $NEW_VERSION ($BUMP_TYPE)"
+
+      - name: Update Chart.yaml
+        run: |
+          sed -i "s/^version: .*/version: ${{ steps.chart_version.outputs.version }}/" ${{ env.CHART_PATH }}/Chart.yaml
+
+          if [[ "${{ steps.app_version.outputs.changed }}" == "true" ]]; then
+            sed -i "s/^appVersion: .*/appVersion: \"${{ steps.app_version.outputs.version }}\"/" ${{ env.CHART_PATH }}/Chart.yaml
+          fi
+
+          echo "--- Updated Chart.yaml ---"
+          head -6 ${{ env.CHART_PATH }}/Chart.yaml
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.CHART_PATH }}/Chart.yaml
+
+          MSG="chore: bump chart version to ${{ steps.chart_version.outputs.version }}"
+          if [[ "${{ steps.app_version.outputs.changed }}" == "true" ]]; then
+            MSG="$MSG (appVersion: ${{ steps.app_version.outputs.version }})"
+          fi
+
+          git commit -m "$MSG [skip ci]"
+          git push
+
+      - name: Add dependency repositories
+        run: |
+          helm repo add dapr https://dapr.github.io/helm-charts/
+          helm repo add hashicorp https://helm.releases.hashicorp.com
+          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART_PATH }}
+
+      - name: Package chart
+        run: helm package ${{ env.CHART_PATH }} --destination .helm-packages
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: Push chart to GHCR (OCI)
+        run: |
+          helm push .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.chart_version.outputs.version }}
+          name: "vnext chart v${{ steps.chart_version.outputs.version }}"
+          body: |
+            ## vNext Helm Chart v${{ steps.chart_version.outputs.version }}
+
+            | | |
+            |---|---|
+            | **Chart Version** | `${{ steps.chart_version.outputs.previous }}` → `${{ steps.chart_version.outputs.version }}` |
+            | **App Version** | `${{ steps.app_version.outputs.version }}` |
+            | **Bump Type** | `${{ steps.bump.outputs.type }}` |
+            | **Trigger** | `${{ github.event_name }}` |
+
+            ### Installation
+
+            ```bash
+            # OCI registry
+            helm install vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
+              --version ${{ steps.chart_version.outputs.version }} \
+              -n vnext --create-namespace
+
+            # From release artifact
+            helm install vnext ./vnext-${{ steps.chart_version.outputs.version }}.tgz \
+              -n vnext --create-namespace
+            ```
+
+            ### Upgrade
+
+            ```bash
+            helm upgrade vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
+              --version ${{ steps.chart_version.outputs.version }} \
+              -n vnext -f my-values.yaml
+            ```
+          files: |
+            .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz
+          generate_release_notes: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

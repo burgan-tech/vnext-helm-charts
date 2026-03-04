@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-sentinel-client
+  labels:
+    app: redis-sentinel-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-sentinel-client
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel-client
+    spec:
+      containers:
+      - name: client
+        image: redis-sentinel-client:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        # Sentinel configuration
+        - name: SENTINEL_HOSTS
+          value: "10.1.2.11:26379,10.1.2.12:26379,10.1.2.13:26379"
+        - name: MASTER_NAME
+          value: "mymaster"
+        
+        # Authentication
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              # Replace with your Redis Sentinel release name
+              name: my-redis-sentinel
+              key: redis-password
+        - name: SENTINEL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              # Replace with your Redis Sentinel release name
+              name: my-redis-sentinel
+              key: sentinel-password
+        
+        # TLS configuration
+        - name: USE_TLS
+          value: "true"
+        - name: TLS_CA_CERT
+          value: "/certs/ca.crt"
+        - name: TLS_CERT
+          value: "/certs/tls.crt"
+        - name: TLS_KEY
+          value: "/certs/tls.key"
+        
+        # Keep connection alive for monitoring
+        - name: KEEP_ALIVE
+          value: "true"
+        
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /certs
+          readOnly: true
+        
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+      
+      volumes:
+      - name: tls-certs
+        secret:
+          # Replace with your Redis Sentinel TLS secret name
+          secretName: my-redis-sentinel-tls
+          items:
+          - key: ca.crt
+            path: ca.crt
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
+---
+# Optional: Service for potential future use
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel-client
+  labels:
+    app: redis-sentinel-client
+spec:
+  selector:
+    app: redis-sentinel-client
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+

@@ -1,0 +1,363 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "redis-sentinel.headlessServiceName" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "redis-sentinel.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-config.yaml") . | sha256sum }}
+        checksum/scripts: {{ include (print $.Template.BasePath "/configmap-scripts.yaml") . | sha256sum }}
+        {{- if .Values.tls.enabled }}
+        checksum/tls-config: {{ .Values.tls | toYaml | sha256sum }}
+        {{- end }}
+        {{- if .Values.metrics.enabled }}
+        {{- if .Values.metrics.podAnnotations.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- end }}
+      labels:
+        {{- include "redis-sentinel.selectorLabels" . | nindent 8 }}
+    spec:
+      # Allow sufficient time for preStop hooks to save state
+      terminationGracePeriodSeconds: 60
+      serviceAccountName: {{ include "redis-sentinel.serviceAccountName" . }}
+      {{- if .Values.openshift.enabled }}
+      {{- with .Values.securityContext.openshift }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- else }}
+      {{- with .Values.securityContext.kubernetes }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- if or (not (hasKey .Values "affinity")) (eq (kindOf .Values.affinity) "map") }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/name: {{ include "redis-sentinel.name" . }}
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      # Redis container
+      - name: redis
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        command:
+          - sh
+          - /scripts/start-redis.sh
+        ports:
+        - name: redis
+          containerPort: {{ .Values.redis.port }}
+          protocol: TCP
+        env:
+        - name: REDIS_PORT
+          value: {{ .Values.redis.port | quote }}
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "redis-sentinel.secretName" . }}
+              key: {{ .Values.auth.redis.passwordKey | default "redis-password" }}
+        - name: SENTINEL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "redis-sentinel.secretName" . }}
+              key: {{ .Values.auth.sentinel.passwordKey | default "sentinel-password" }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                # Force Redis to save state before shutdown
+                echo "PreStop: Saving Redis state..."
+                {{- if .Values.tls.enabled }}
+                redis-cli -a "$REDIS_PASSWORD" -p {{ .Values.tls.redis.port | default .Values.redis.port }} --tls --cacert /etc/redis/tls/ca.crt SAVE 2>/dev/null || echo "Note: SAVE failed (pod may be shutting down)"
+                {{- else }}
+                redis-cli -a "$REDIS_PASSWORD" -p {{ .Values.redis.port }} SAVE 2>/dev/null || echo "Note: SAVE failed (pod may be shutting down)"
+                {{- end }}
+                # Force filesystem sync
+                sync
+                sleep 2
+                echo "PreStop: Redis state saved"
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - /scripts/health-check-redis.sh
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - /scripts/health-check-redis.sh
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.resources.redis | nindent 10 }}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+        - name: secrets
+          mountPath: /secrets
+          readOnly: true
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          mountPath: /etc/redis/tls
+          readOnly: true
+        {{- end }}
+      
+      # Sentinel container
+      - name: sentinel
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        command:
+          - sh
+          - /scripts/start-sentinel.sh
+        ports:
+        - name: sentinel
+          containerPort: {{ .Values.sentinel.port }}
+          protocol: TCP
+        env:
+        - name: REDIS_PORT
+          value: {{ .Values.redis.port | quote }}
+        - name: SENTINEL_PORT
+          value: {{ .Values.sentinel.port | quote }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "redis-sentinel.secretName" . }}
+              key: {{ .Values.auth.redis.passwordKey | default "redis-password" }}
+        - name: SENTINEL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "redis-sentinel.secretName" . }}
+              key: {{ .Values.auth.sentinel.passwordKey | default "sentinel-password" }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                # Force Sentinel to save state before shutdown
+                echo "PreStop: Saving Sentinel state..."
+                {{- if .Values.tls.enabled }}
+                redis-cli -a "$SENTINEL_PASSWORD" -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt SENTINEL FLUSHCONFIG 2>/dev/null || echo "Note: SENTINEL FLUSHCONFIG failed (pod may be shutting down)"
+                {{- else }}
+                redis-cli -a "$SENTINEL_PASSWORD" -p {{ .Values.sentinel.port }} SENTINEL FLUSHCONFIG 2>/dev/null || echo "Note: SENTINEL FLUSHCONFIG failed (pod may be shutting down)"
+                {{- end }}
+                # Force filesystem sync
+                sync
+                sleep 2
+                echo "PreStop: Sentinel state saved"
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - /scripts/health-check-sentinel.sh
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - /scripts/health-check-sentinel.sh
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.resources.sentinel | nindent 10 }}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+        - name: secrets
+          mountPath: /secrets
+          readOnly: true
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          mountPath: /etc/redis/tls
+          readOnly: true
+        {{- end }}
+      
+      {{- if .Values.metrics.enabled }}
+      # Redis Exporter container
+      - name: metrics
+        image: {{ include "redis-sentinel.metrics.image" . }}
+        imagePullPolicy: {{ .Values.metrics.image.pullPolicy }}
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        args:
+        - --web.listen-address=:{{ .Values.metrics.port }}
+        - --web.telemetry-path=/metrics
+        ports:
+        - name: metrics
+          containerPort: {{ .Values.metrics.port }}
+          protocol: TCP
+        env:
+        {{- if .Values.tls.enabled }}
+        - name: REDIS_ADDR
+          value: "rediss://127.0.0.1:{{ .Values.tls.redis.port | default .Values.redis.port }}"
+        {{- if .Values.tls.redis.authClients }}
+        - name: REDIS_EXPORTER_TLS_CLIENT_KEY_FILE
+          value: "/etc/redis/tls/tls.key"
+        - name: REDIS_EXPORTER_TLS_CLIENT_CERT_FILE
+          value: "/etc/redis/tls/tls.crt"
+        {{- end }}
+        - name: REDIS_EXPORTER_TLS_CA_CERT_FILE
+          value: "/etc/redis/tls/ca.crt"
+        - name: REDIS_EXPORTER_SKIP_TLS_VERIFICATION
+          value: "false"
+        {{- else }}
+        - name: REDIS_ADDR
+          value: "redis://127.0.0.1:{{ .Values.redis.port }}"
+        {{- end }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "redis-sentinel.secretName" . }}
+              key: {{ .Values.auth.redis.passwordKey | default "redis-password" }}
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.metrics.resources | nindent 10 }}
+        {{- if .Values.tls.enabled }}
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/redis/tls
+          readOnly: true
+        {{- end }}
+      {{- end }}
+      
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "redis-sentinel.fullname" . }}-config
+      - name: scripts
+        configMap:
+          name: {{ include "redis-sentinel.fullname" . }}-scripts
+          defaultMode: 0755
+      - name: secrets
+        secret:
+          secretName: {{ include "redis-sentinel.secretName" . }}
+          defaultMode: 0440
+      {{- if .Values.tls.enabled }}
+      - name: tls-certs
+        secret:
+          secretName: {{ .Values.tls.certificateSecret | default (printf "%s-tls" (include "redis-sentinel.fullname" .)) }}
+          defaultMode: 0640
+      {{- end }}
+      {{- if not .Values.redis.persistence.enabled }}
+      - name: data
+        emptyDir: {}
+      {{- end }}
+  
+  {{- if .Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+        - {{ .Values.redis.persistence.accessMode }}
+      {{- if .Values.redis.persistence.storageClass }}
+      storageClassName: {{ .Values.redis.persistence.storageClass }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.redis.persistence.size }}
+  {{- end }}
+

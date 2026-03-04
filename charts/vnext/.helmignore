@@ -1,0 +1,231 @@
+# ==============================================================================
+# .helmignore - Files to exclude when packaging the Helm chart
+# ==============================================================================
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+
+# ==============================================================================
+# VERSION CONTROL SYSTEMS
+# ==============================================================================
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+.svnignore
+
+# ==============================================================================
+# BACKUP AND TEMPORARY FILES
+# ==============================================================================
+*.swp
+*.bak
+*.tmp
+*.temp
+*.orig
+*~
+*.old
+\#*\#
+.#*
+
+# ==============================================================================
+# IDE AND EDITOR FILES
+# ==============================================================================
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# Vim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# TextMate
+*.tmproj
+*.tmproject
+tmtags
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+# ==============================================================================
+# CI/CD AND AUTOMATION
+# ==============================================================================
+.gitlab-ci.yml
+.github/
+.circleci/
+.travis.yml
+azure-pipelines.yml
+Jenkinsfile
+.jenkins/
+*.pipeline
+bitbucket-pipelines.yml
+.drone.yml
+
+# ==============================================================================
+# DEVELOPMENT AND TESTING
+# ==============================================================================
+*.test
+*.out
+.env
+.env.*
+*.local
+.venv/
+venv/
+env/
+node_modules/
+coverage/
+*.cover
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# ==============================================================================
+# HELM SPECIFIC
+# ==============================================================================
+# Packaged charts
+*.tgz
+
+# Helm deployment tracking
+.deploy
+
+# Old requirements lock (Chart.lock is the new format)
+requirements.lock
+
+# ==============================================================================
+# EXAMPLE VALUES AND DOCUMENTATION
+# ==============================================================================
+# Example values files (users should not rely on these in production)
+example_values/
+examples/
+
+# Extended documentation (keep README.md and NOTES.txt)
+docs/
+CONTRIBUTING.md
+MIGRATION_GUIDE.md
+REFACTORING_SUMMARY.md
+SIMPLIFICATION_SUMMARY.md
+*.md.backup
+
+# ==============================================================================
+# BUILD AND DEPLOYMENT ARTIFACTS
+# ==============================================================================
+# Rendered templates for debugging
+rendered.yaml
+output.yaml
+debug.yaml
+test-output/
+debug/
+
+# Build artifacts
+dist/
+build/
+target/
+bin/
+obj/
+
+# ==============================================================================
+# SCRIPTS AND UTILITIES
+# ==============================================================================
+# Deployment scripts (not needed in the chart package)
+*.sh
+*.bash
+*.zsh
+*.fish
+
+# Python scripts
+*.py
+__pycache__/
+*.pyc
+*.pyo
+
+# Exclude Dockerfile (not needed in Helm package)
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# ==============================================================================
+# SECURITY AND SECRETS
+# ==============================================================================
+# Never include secrets or credentials
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+.secrets/
+credentials/
+
+# ==============================================================================
+# MISCELLANEOUS
+# ==============================================================================
+# Log files
+*.log
+logs/
+
+# Archive files
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+
+# Lock files (keep Chart.lock, ignore others)
+package-lock.json
+yarn.lock
+Gemfile.lock
+Pipfile.lock
+
+# OS specific
+.Trash-*/
+*.lnk
+
+# ==============================================================================
+# NOTE: The following files are ALWAYS included by Helm automatically:
+# - Chart.yaml
+# - Chart.lock
+# - values.yaml
+# - values.schema.json
+# - templates/
+# - charts/
+# - README.md (root level)
+# - LICENSE
+# - templates/NOTES.txt
+# ==============================================================================

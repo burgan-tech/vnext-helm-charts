@@ -1,0 +1,27 @@
+{{- if .Values.vault.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "vnext.fullname" . }}-vault-initializer-role
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames:
+      - "{{ include "vnext.fullname" . }}-redis-sentinel"
+      {{- if not .Values.vault.server.dev.enabled }}
+      - "vault-keys"
+      {{- end }}
+
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+
+  {{- if not .Values.vault.server.dev.enabled }}
+  - apiGroups: ["dapr.io"]
+    resources: ["components"]
+    verbs: ["patch","get"]
+    resourceNames:
+      - "{{ include "vnext.fullname" . }}-secret"
+  {{- end }}
+{{- end }}

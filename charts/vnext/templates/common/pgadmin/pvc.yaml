@@ -1,0 +1,17 @@
+{{ if and (and .Values.pgAdmin.enabled .Values.pgAdmin.persistence.enabled) .Values.postgres.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vnext.fullname" . }}-pgadmin-data
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: pgadmin4
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.pgAdmin.persistence.size }}
+  {{- if .Values.pgAdmin.persistence.storageClass }}
+  storageClassName: {{ .Values.pgAdmin.persistence.storageClass }}
+  {{- end }}
+{{- end -}}

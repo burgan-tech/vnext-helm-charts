@@ -1,0 +1,105 @@
+{{- if .Values.vault.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vnext.fullname" . }}-vault-initializer
+  annotations:
+    "helm.sh/hook": post-install
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ include "vnext.fullname" . }}-vault-initializer
+      containers:
+        - name: vault-initializer
+          image: ghcr.io/burgan-tech/vault-initializer:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Vault initializing status checking..."
+              sleep 2
+
+              {{- if not .Values.vault.server.dev.enabled }}
+              until [ "$(curl -s $VAULT_ADDR/v1/sys/init | jq -r .initialized)" = "true" ] || [ "$(curl -s $VAULT_ADDR/v1/sys/init | jq -r .initialized)" = "false" ]; do
+                echo "Vault initialization status unknown. Waiting for 5 seconds..."
+                sleep 5
+              done
+
+              if [ "$(curl -s $VAULT_ADDR/v1/sys/init | jq -r .initialized)" = "true" ]; then
+                echo "Vault already initialized. Skipping initialization..."
+                exit 0
+              fi
+              
+              curl -s $VAULT_ADDR/v1/sys/init -X POST -H "Content-Type: application/json" --data '{"secret_shares": {{ .Values.vault.server.secretShares }},"secret_threshold": {{ .Values.vault.server.secretThreshold }}}' > /tmp/keys.json
+              echo "Vault initialized"
+              
+              cat /tmp/keys.json | jq -r .keys_base64[] | xargs -I{} curl -s --request POST --data '{"key": "{}"}' $VAULT_ADDR/v1/sys/unseal
+              echo "Vault unsealed"
+
+              kubectl create secret generic vault-keys --from-file /tmp/keys.json
+              echo "Vault keys secret created"
+              
+              ROOT_TOKEN=$(cat /tmp/keys.json | jq -r .root_token)
+
+              {{- if not .Values.global.externalVault.enabled }}
+              kubectl get component {{ include "vnext.fullname" . }}-secret -o json \
+                | jq --arg v "$ROOT_TOKEN" '
+                  .spec.metadata |= map(
+                    if .name == "vaultToken" then
+                      .value = $v
+                    else
+                      .
+                    end
+                  )
+                ' \
+                | kubectl apply -f -
+              {{- end }}
+
+              {{- else }}
+              ROOT_TOKEN="root"
+              {{- end }}
+
+              ENGINE_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$VAULT_ADDR/v1/sys/mounts/{{ printf "vnext-%s-engine" .Values.global.appDomain }}/tune" -H "X-Vault-Token: $ROOT_TOKEN")
+              SECRET_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$VAULT_ADDR/v1/{{ printf "vnext-%s-engine" .Values.global.appDomain }}/data/workflow-secret" -H "X-Vault-Token: $ROOT_TOKEN")
+              
+              if [ "$ENGINE_CHECK" -ne 200 ]; then
+                curl -sX POST "$VAULT_ADDR/v1/sys/mounts/{{ printf "vnext-%s-engine" .Values.global.appDomain }}" \
+                -H "Content-Type: application/json" \
+                -H "X-Vault-Token: $ROOT_TOKEN" \
+                -d '{
+                  "type": "kv",
+                  "options": {
+                    "version": 2
+                  }
+                }'
+                echo "Secret engine created"
+              fi
+
+              REDIS_PASSWORD=$(kubectl get secret {{ include "vnext.fullname" . }}-redis-sentinel -o json | jq -r '.data["redis-password"]' | base64 -d)
+              SENTINEL_PASSWORD=$(kubectl get secret {{ include "vnext.fullname" . }}-redis-sentinel -o json | jq -r '.data["sentinel-password"]' | base64 -d)
+              
+              if [ "$SECRET_CHECK" -ne 200 ]; then
+                curl -sX POST "$VAULT_ADDR/v1/{{ printf "vnext-%s-engine" .Values.global.appDomain }}/data/workflow-secret" \
+                -H "Content-Type: application/json" \
+                -H "X-Vault-Token: $ROOT_TOKEN" \
+                -d "{
+                  \"data\": {
+                    \"ConnectionStrings:Default\": \"Host={{ include "vnext.fullname" . }}-postgres-headless;Port=5432;Database={{ .Values.postgres.auth.database }};Username={{ .Values.postgres.auth.username }};Password={{ .Values.postgres.auth.password }};\",
+                    \"redis-password\": \"$REDIS_PASSWORD\",
+                    \"sentinel-password\": \"$SENTINEL_PASSWORD\"
+                  }
+                }"
+                echo "Secret data created"
+              else
+                echo "Secret 'workflow-secret' already exists."
+              fi
+              {{- if not .Values.vault.server.dev.enabled }}
+              rm /tmp/keys.json
+              {{- end }}
+          env:
+            - name: VAULT_ADDR
+              value: "http://{{ .Release.Name }}-vault:8200"
+      restartPolicy: Never
+{{- end }}

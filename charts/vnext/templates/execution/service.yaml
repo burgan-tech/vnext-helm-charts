@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-execution
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution
+spec:
+  type: {{ .Values.execution.service.type }}
+  ports:
+    - port: {{ .Values.execution.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "vnext.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: execution

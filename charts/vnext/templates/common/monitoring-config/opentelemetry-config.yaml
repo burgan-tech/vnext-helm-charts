@@ -1,0 +1,55 @@
+{{- if (index .Values "opentelemetry-collector").enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opentelemetry-collector-config
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: opentelemetry-collector
+data:
+  relay: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+
+    exporters:
+      debug:
+        verbosity: detailed
+      otlphttp/openobserve:
+        endpoint: http://{{ include "vnext.fullname" . }}-openobserve:5080/api/default
+        headers:
+          Authorization: Basic {{ printf "%s:%s" .Values.openobserve.auth.username .Values.openobserve.auth.password |  b64enc }}
+          stream-name: {{ include "vnext.fullname" . }}
+        tls:
+          insecure: true
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+      zpages:
+        endpoint: 0.0.0.0:55679
+
+    service:
+      extensions: [health_check, pprof, zpages]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug, otlphttp/openobserve]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug, otlphttp/openobserve]
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug, otlphttp/openobserve]
+{{- end -}}

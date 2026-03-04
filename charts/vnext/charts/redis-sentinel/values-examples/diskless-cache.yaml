@@ -1,0 +1,493 @@
+# Default values for Redis Sentinel with External Access
+# This is an example configuration with external access enabled
+
+# Number of Redis nodes (1 master + N replicas)
+# Minimum 2, recommended 3 for production
+replicaCount: 3
+
+# Docker image configuration
+image:
+  repository: redis
+  pullPolicy: IfNotPresent
+  tag: "8.2.2-alpine"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Authentication
+auth:
+  # Use existing secret for passwords (recommended for production)
+  # If set, this takes precedence over redis.password and sentinel.password
+  # 
+  # IMPORTANT: Secret must exist in the same namespace as this release
+  # Example:
+  #   kubectl create secret generic my-redis-secret \
+  #     --from-literal=redis-password='my-redis-pass' \
+  #     --from-literal=sentinel-password='my-sentinel-pass' \
+  #     --namespace=my-namespace
+  existingSecret: ""
+  redis:
+    passwordKey: "redis-password"
+  sentinel:
+    passwordKey: "sentinel-password"
+
+# Redis configuration
+redis:
+  # Redis password for authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Redis port
+  port: 6679
+  
+  # Persistence configuration
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  
+  # Redis server configuration
+  maxMemory: "0"
+  maxMemoryPolicy: "allkeys-lru"
+  appendonly: false
+  
+  # Extra Redis configuration
+  # Will be appended to redis.conf
+  extraConfig: |
+    # Custom Redis configuration
+    # ==========================================
+    # NETWORKING (Optimized for high throughput)
+    # ==========================================
+    # Increased from 511 for more pending connections
+    tcp-backlog 511
+    # No client timeout
+    timeout 0
+    # Reduced from 300 for faster dead connection detection
+    tcp-keepalive 300
+    # Enable I/O threading (Redis 6+)
+    io-threads 1
+    # Use I/O threads for reads too
+    io-threads-do-reads no
+    # ==========================================
+    # GENERAL
+    # ==========================================
+    daemonize no
+    databases 16
+    set-proc-title yes
+    proc-title-template "{title} {listen-addr} {server-mode}"
+
+    # ==========================================
+    # REPLICATION (Additional settings)
+    # ==========================================
+    # Note: repl-diskless-* settings already set by template
+    replica-serve-stale-data yes
+    replica-read-only yes
+    repl-diskless-sync-max-replicas 0
+    repl-disable-tcp-nodelay no
+    replica-priority 100
+    repl-backlog-size 16mb
+    repl-backlog-ttl 3600
+
+    # ==========================================
+    # SECURITY
+    # ==========================================
+    acllog-max-len 128
+    
+    # ==========================================
+    # LAZY FREEING (Recommended: yes for cache performance)
+    # ==========================================
+    # Note: User requested "no" but "yes" is better for cache workloads
+    # Uncomment below to use user's requested values:
+    # lazyfree-lazy-eviction no
+    # lazyfree-lazy-expire no
+    # lazyfree-lazy-server-del no
+    # replica-lazy-flush no
+    # lazyfree-lazy-user-del no
+    # lazyfree-lazy-user-flush no
+    #
+    # Recommended for better cache performance:
+    lazyfree-lazy-eviction no
+    lazyfree-lazy-expire no
+    lazyfree-lazy-server-del no
+    replica-lazy-flush yes
+    lazyfree-lazy-user-del no
+    lazyfree-lazy-user-flush no
+    slave-lazy-flush no
+
+    # ==========================================
+    # MEMORY MANAGEMENT (Optimized for cache workload)
+    # ==========================================
+    oom-score-adj no
+    oom-score-adj-values 0 200 800
+    disable-thp yes
+    activerehashing yes
+    
+    # Client tracking settings for better memory efficiency
+    # 10M keys max for client tracking
+    tracking-table-max-keys 10000000
+    # Reserve 10% memory for client buffers
+    maxmemory-clients 0
+    
+    # LRU tuning for better eviction accuracy
+    # Increased from default 5 for better LRU accuracy
+    maxmemory-samples 5
+    # LFU counter logarithm factor
+    lfu-log-factor 10
+    # LFU counter decay time in minutes
+    lfu-decay-time 1
+
+    # ==========================================
+    # APPEND ONLY FILE (Additional settings)
+    # ==========================================
+    # Note: appendonly no already set by template
+    appendfilename "appendonly.aof"
+    appenddirname "appendonlydir"
+    appendfsync no
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    aof-load-truncated yes
+    aof-use-rdb-preamble yes
+    aof-timestamp-enabled no
+    aof-rewrite-incremental-fsync yes
+    
+    # ==========================================
+    # LUA SCRIPTING
+    # ==========================================
+    lua-time-limit 5000
+    
+    # ==========================================
+    # SLOW LOG (Tuned for cache monitoring)
+    # ==========================================
+    # Reduced from 10000 (5ms threshold)
+    slowlog-log-slower-than 5000
+    # Increased from 128 for better history
+    slowlog-max-len 256
+
+    # ==========================================
+    # LATENCY MONITOR (Enabled for p99 tracking)
+    # ==========================================
+    # Enable latency monitoring for >50ms events
+    latency-monitor-threshold 0
+    
+    # ==========================================
+    # EVENT NOTIFICATION
+    # ==========================================
+    notify-keyspace-events ""
+    
+    # ==========================================
+    # ADVANCED CONFIG
+    # ==========================================
+    hash-max-listpack-entries 512
+    hash-max-listpack-value 64
+    list-max-listpack-size -2
+    list-compress-depth 0
+    set-max-intset-entries 512
+    zset-max-listpack-entries 128
+    zset-max-listpack-value 64
+    hll-sparse-max-bytes 3000
+    stream-node-max-bytes 4096
+    stream-node-max-entries 100
+    # ==========================================
+    # CLIENT OUTPUT BUFFER LIMITS (Optimized for high throughput)
+    # ==========================================
+    # Increased from 0 for normal clients
+    client-output-buffer-limit normal 16mb 8mb 60
+    # Doubled for better replication
+    client-output-buffer-limit replica 512mb 128mb 60
+    # Doubled for pubsub
+    client-output-buffer-limit pubsub 64mb 16mb 60
+    
+    # ==========================================
+    # FREQUENCY AND PERFORMANCE
+    # ==========================================
+    hz 10
+    dynamic-hz yes
+    
+    # ==========================================
+    # JEMALLOC
+    # ==========================================
+    jemalloc-bg-thread yes
+
+# TLS/SSL configuration
+tls:
+  # Enable TLS for Redis and Sentinel connections
+  # Set to true for production with external access
+  enabled: false
+  
+  # Certificate generation settings
+  certificateSecret: ""  # Use existing secret (if not set, certificates will be auto-generated)
+  
+  # Certificate validity period
+  certificate:
+    # Certificate expiry in days
+    expiryDays: 3650
+    
+    # Certificate details
+    subject:
+      country: "TR"
+      state: "Istanbul"
+      locality: "Istanbul"
+      organization: "Example Company"
+      organizationalUnit: "DevOps"
+      commonName: "redis-sentinel"
+    
+    # Subject Alternative Names (SANs)
+    # IMPORTANT: Add external IPs here when using TLS with external access
+    additionalSANs:
+      - "10.180.141.221"
+      - "10.180.141.222"
+      - "10.180.141.223"
+      
+    # Example - uncomment and modify:
+    # additionalSANs:
+    #   - "10.1.2.21"
+    #   - "10.1.2.22"
+    #   - "10.1.2.23"
+  
+  # TLS settings for Redis
+  redis:
+    # Port for TLS connections (if 0, uses redis.port)
+    port: 6679
+    
+    # Enable TLS for replication (must be true when TLS is enabled)
+    replicationEnabled: true
+    
+    # Require client certificates (false = only CA cert needed)
+    authClients: false
+    
+    # Additional TLS configuration
+    extraConfig: ""
+  
+  # TLS settings for Sentinel
+  sentinel:
+    # Port for TLS connections (if 0, uses sentinel.port)
+    port: 26679
+    
+    # Require client certificates
+    authClients: false
+    
+    # Additional TLS configuration
+    extraConfig: ""
+    
+# Sentinel configuration
+sentinel:
+  # Sentinel password for Sentinel authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Sentinel port
+  port: 26679
+  
+  # Quorum: number of Sentinels that need to agree about master being down
+  # Typically (replicaCount / 2) + 1
+  # For 3 nodes: quorum = 2
+  quorum: 2
+  
+  # Time in milliseconds after which master is considered down
+  downAfterMilliseconds: 30000
+  
+  # Timeout for failover
+  failoverTimeout: 180000
+  
+  # Number of replicas that can sync with new master after failover
+  parallelSyncs: 1
+  
+  # Extra Sentinel configuration
+  extraConfig: |
+    # Custom Sentinel configuration
+
+# Service configuration
+service:
+  type: ClusterIP  # Keep as ClusterIP, external access uses separate LoadBalancer services
+  redis:
+    port: 6679
+    nodePort: ""
+  sentinel:
+    port: 26679
+    nodePort: ""
+  annotations: {}
+
+# External access configuration
+# Allows Redis Sentinel to be accessible from outside Kubernetes
+externalAccess:
+  # Enable external access via LoadBalancer services (one per pod)
+  enabled: false
+  
+  service:
+    # Service type for external access (only LoadBalancer is supported)
+    type: LoadBalancer
+    
+    # Port for Redis service
+    redisPort: 6679
+    
+    # Port for Sentinel service
+    sentinelPort: 26679
+    
+    # IMPORTANT: Configure one IP per pod (must match replicaCount = 3)
+    # Replace with your actual LoadBalancer IPs from MetalLB or cloud provider
+    loadBalancerIPs:
+      - "10.180.141.221"
+      - "10.180.141.222"
+      - "10.180.141.223"
+    
+    # Annotations for external access services
+    # MetalLB configuration example:
+    annotations:
+      metallb.universe.tf/address-pool: addresspool-internext-redis
+      # Note: metallb.universe.tf/allow-shared-ip is AUTOMATICALLY added by template
+      # It's generated as: "redis-sentinel-<LOADBALANCER_IP>"
+    
+    # Labels for external access services
+    labels: {}
+    
+    # Load balancer source ranges for security
+    # Restrict access to specific IP ranges
+    loadBalancerSourceRanges: []
+    # Example - uncomment to restrict access:
+    # loadBalancerSourceRanges:
+    #   - "192.168.1.0/24"    # Office network
+    #   - "10.0.0.0/8"        # Internal networks
+    
+    # External traffic policy (Cluster or Local)
+    # Local preserves source IP but requires nodes to have the pod
+    externalTrafficPolicy: Cluster
+  
+  # Timeout configuration for pod restart job
+  restartJob:
+    # Helm hook timeout (total time for the entire restart job)
+    # Format: duration string (e.g., "30m", "1800s")
+    # Should be: (podReadyTimeout * replicaCount) + buffer
+    # For 3 nodes: 3 * 5min + 5min buffer = 20min
+    helmHookTimeout: "20m"
+    
+    # Timeout for each pod to become ready after restart (seconds)
+    podReadyTimeout: 300  # 5 minutes per pod
+    
+    # Delay between restarting each pod (seconds)
+    delayBetweenPods: 10
+
+# Resource limits
+resources:
+  redis:
+    limits:
+      cpu: 1000m
+      memory: 3Gi
+    requests:
+      cpu: 100m
+      memory: 50Mi
+  sentinel:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Pod anti-affinity
+# Pod anti-affinity configuration
+# Leave as {} to use default soft anti-affinity with matchLabels
+# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+affinity: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# OpenShift compatibility
+openshift:
+  # Enable OpenShift-specific configurations
+  # When true: Uses minimal security context (lets SCC handle it)
+  # When false: Uses standard Kubernetes security context
+  enabled: true
+
+# Security context - not needed with new structure, using openshift flag instead
+# The security context is now managed through the openshift.enabled flag
+# See main values.yaml for full securityContext configuration
+securityContext:
+  runAsNonRoot: true
+  # Uncomment below for non-OpenShift environments if needed:
+  # runAsUser: 999
+  # runAsGroup: 999
+  # fsGroup: 999
+
+podSecurityContext:
+  sysctls: []
+
+# Pod management policy
+podManagementPolicy: OrderedReady
+
+# Update strategy
+updateStrategy:
+  type: RollingUpdate
+
+# Redis Exporter for Prometheus metrics
+metrics:
+  enabled: true
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  port: 9121
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+  # Pod annotations for standard Prometheus scraping
+  podAnnotations:
+    enabled: true
+
+# External Sentinel Exporter (separate deployment)
+# Monitors Sentinel service for metrics
+sentinelExporter:
+  enabled: true
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 9121
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+  # Pod annotations for standard Prometheus scraping
+  podAnnotations:
+    enabled: true

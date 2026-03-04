@@ -1,0 +1,64 @@
+{{ if  .Values.openobserve.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-openobserve
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: openobserve
+spec:
+  replicas: {{ .Values.openobserve.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vnext.labels" . | nindent 6 }}
+      app: openobserve
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.labels" . | nindent 8 }}
+        app: openobserve
+    spec:
+      containers:
+        - name: {{ include "vnext.fullname" . }}-openobserve
+          image: {{ .Values.openobserve.image.registry }}/{{ .Values.openobserve.image.repository }}:{{ .Values.openobserve.image.tag }}
+          imagePullPolicy: {{ .Values.openobserve.image.imagePullPolicy }}
+          ports:
+            - containerPort: 5080
+              name: http
+          env:
+            - name: ZO_ROOT_USER_EMAIL
+              value: {{ .Values.openobserve.auth.username }}
+            - name: ZO_ROOT_USER_PASSWORD
+              value: {{ .Values.openobserve.auth.password }}
+            - name: ZO_DATA_DIR 
+              value: "/data"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "10m"    # 10m CPU
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+
+{{- end -}}

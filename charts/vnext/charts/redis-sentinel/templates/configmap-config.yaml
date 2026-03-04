@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-config
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    # Redis Configuration
+    {{- if .Values.tls.enabled }}
+    # TLS mode - disable plain TCP port
+    port 0
+    tls-port {{ .Values.tls.redis.port | default .Values.redis.port }}
+    {{- else }}
+    port {{ .Values.redis.port }}
+    {{- end }}
+    dir /data
+    
+    {{- if .Values.tls.enabled }}
+    # TLS/SSL Configuration
+    tls-cert-file /etc/redis/tls/tls.crt
+    tls-key-file /etc/redis/tls/tls.key
+    tls-ca-cert-file /etc/redis/tls/ca.crt
+    {{- if .Values.tls.redis.authClients }}
+    tls-auth-clients yes
+    {{- else }}
+    tls-auth-clients no
+    {{- end }}
+    {{- if .Values.tls.redis.replicationEnabled }}
+    tls-replication yes
+    {{- end }}
+    {{- if .Values.tls.redis.extraConfig }}
+    {{ .Values.tls.redis.extraConfig | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    
+    # Replication
+    replica-read-only yes
+    
+    # Persistence
+    {{- if .Values.redis.persistence.enabled }}
+    save 900 1
+    save 300 10
+    save 60 10000
+    {{- else }}
+    save ""
+    {{- end }}
+    
+    {{- if .Values.redis.appendonly }}
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    {{- else }}
+    appendonly no
+    {{- end }}
+    
+    # Memory Management
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy {{ .Values.redis.maxMemoryPolicy }}
+    
+    # Network
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    
+    # Logging
+    loglevel notice
+    
+    # Extra configuration
+    {{- if .Values.redis.extraConfig }}
+    {{ .Values.redis.extraConfig | nindent 4 }}
+    {{- end }}
+  
+  sentinel.conf: |
+    # Sentinel Configuration
+    {{- if .Values.tls.enabled }}
+    # TLS mode - disable plain TCP port
+    port 0
+    tls-port {{ .Values.tls.sentinel.port | default .Values.sentinel.port }}
+    {{- else }}
+    port {{ .Values.sentinel.port }}
+    {{- end }}
+    dir /tmp
+    
+    {{- if .Values.tls.enabled }}
+    # TLS/SSL Configuration
+    tls-cert-file /etc/redis/tls/tls.crt
+    tls-key-file /etc/redis/tls/tls.key
+    tls-ca-cert-file /etc/redis/tls/ca.crt
+    {{- if .Values.tls.sentinel.authClients }}
+    tls-auth-clients yes
+    {{- else }}
+    tls-auth-clients no
+    {{- end }}
+    tls-replication yes
+    {{- if .Values.tls.sentinel.extraConfig }}
+    {{ .Values.tls.sentinel.extraConfig | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    
+    # Master monitoring will be configured at runtime by init script
+    # sentinel monitor mymaster <master-host> {{ .Values.redis.port }} {{ .Values.sentinel.quorum }}
+    
+    # Timeouts
+    sentinel down-after-milliseconds mymaster {{ .Values.sentinel.downAfterMilliseconds }}
+    sentinel failover-timeout mymaster {{ .Values.sentinel.failoverTimeout }}
+    sentinel parallel-syncs mymaster {{ .Values.sentinel.parallelSyncs }}
+    
+    # Enable hostname resolution
+    sentinel resolve-hostnames yes
+    sentinel announce-hostnames yes
+    
+    # Extra configuration
+    {{- if .Values.sentinel.extraConfig }}
+    {{ .Values.sentinel.extraConfig | nindent 4 }}
+    {{- end }}
+

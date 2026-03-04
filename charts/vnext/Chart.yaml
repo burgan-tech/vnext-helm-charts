@@ -1,0 +1,45 @@
+apiVersion: v2
+name: vnext
+description: vNext Workflow Orchestration Platform - A comprehensive microservices-based workflow orchestration system with built-in observability, service mesh, and high availability features
+type: application
+version: 1.0.20
+appVersion: "0.0.38"
+home: https://github.com/burgan-tech/vnext
+sources:
+  - https://github.com/burgan-tech/vnext
+keywords:
+  - workflow
+  - orchestration
+  - microservices
+  - dapr
+  - distributed-systems
+  - observability
+  - service-mesh
+dependencies:
+  - condition: redis-sentinel.enabled
+    name: redis-sentinel
+    version: 1.0.0
+  - condition: dapr.enabled
+    name: dapr
+    repository: https://dapr.github.io/helm-charts/
+    version: 1.15.7
+  - condition: dapr-dashboard.enabled
+    name: dapr-dashboard
+    repository: https://dapr.github.io/helm-charts/
+    version: 0.15.0
+  - condition: vault.enabled
+    name: vault
+    repository: https://helm.releases.hashicorp.com
+    version: 0.31.0
+  - condition: opentelemetry-collector.enabled
+    name: opentelemetry-collector
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    version: 0.138.0
+  - condition: kube-prometheus-stack.enabled
+    name: kube-prometheus-stack
+    repository: https://prometheus-community.github.io/helm-charts
+    version: 78.4.0
+icon: file://logo.png
+maintainers:
+  - email: mrmustafafidan@gmail.com
+    name: Mustafa Fidan

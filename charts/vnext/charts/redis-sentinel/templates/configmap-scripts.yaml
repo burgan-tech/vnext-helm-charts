@@ -1,0 +1,253 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-scripts
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+data:
+  start-redis.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Load Redis password from environment (injected from Secret)
+    # REDIS_PASSWORD is used for Redis authentication
+    
+    # Get pod ordinal
+    HOSTNAME=$(hostname)
+    POD_INDEX="${HOSTNAME##*-}"
+    
+    # Copy base config
+    cp /config/redis.conf /data/redis.conf
+    
+    {{- if .Values.externalAccess.enabled }}
+    # External access: announce external IP if configured
+    {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
+    {{- if gt (len $loadBalancerIPs) 0 }}
+    case $POD_INDEX in
+    {{- range $i, $ip := $loadBalancerIPs }}
+      {{ $i }})
+        ANNOUNCE_IP="{{ $ip }}"
+        ;;
+    {{- end }}
+      *)
+        echo "Warning: No external IP configured for pod index $POD_INDEX"
+        ANNOUNCE_IP="$POD_IP"
+        ;;
+    esac
+    echo "replica-announce-ip $ANNOUNCE_IP" >> /data/redis.conf
+    echo "replica-announce-port {{ .Values.externalAccess.service.redisPort }}" >> /data/redis.conf
+    echo "External access enabled: announcing IP $ANNOUNCE_IP for pod $POD_INDEX"
+    {{- end }}
+    {{- end }}
+    
+    # Add authentication
+    if [ -n "$REDIS_PASSWORD" ]; then
+      echo "requirepass $REDIS_PASSWORD" >> /data/redis.conf
+      echo "masterauth $REDIS_PASSWORD" >> /data/redis.conf
+    fi
+    
+    # Determine if this is initial master (pod-0)
+    # Sentinel will handle failover later
+    if [ "$POD_INDEX" = "0" ]; then
+      echo "Starting as initial master (pod-0)"
+    else
+      echo "Starting as replica (pod-$POD_INDEX)"
+      # Initial master is pod-0 - use internal DNS for replication
+      MASTER_HOST="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      echo "replicaof $MASTER_HOST {{ .Values.redis.port }}" >> /data/redis.conf
+      
+      # Wait for master to be ready
+      echo "Waiting for master to be ready..."
+      {{- if .Values.tls.enabled }}
+      {{- if .Values.tls.redis.authClients }}
+      until redis-cli -h $MASTER_HOST -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
+      {{- else }}
+      until redis-cli -h $MASTER_HOST -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
+      {{- end }}
+      {{- else }}
+      until redis-cli -h $MASTER_HOST -p {{ .Values.redis.port }} -a "$REDIS_PASSWORD" ping 2>/dev/null; do
+      {{- end }}
+        echo "Master not ready, waiting..."
+        sleep 2
+      done
+      echo "Master is ready!"
+    fi
+    
+    echo "Starting Redis server..."
+    exec redis-server /data/redis.conf
+  
+  start-sentinel.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Load passwords from environment (injected from Secret)
+    # REDIS_PASSWORD - for authenticating with Redis
+    # SENTINEL_PASSWORD - for Sentinel's own authentication
+    
+    # Get pod ordinal
+    HOSTNAME=$(hostname)
+    POD_INDEX="${HOSTNAME##*-}"
+    
+    # Copy base sentinel config
+    cp /config/sentinel.conf /data/sentinel.conf
+    
+    # Add Redis password for Sentinel to authenticate with Redis master/replicas
+    if [ -n "$REDIS_PASSWORD" ]; then
+      echo "sentinel auth-pass mymaster $REDIS_PASSWORD" >> /data/sentinel.conf
+    fi
+    
+    # Add Sentinel password for clients to authenticate with Sentinel
+    if [ -n "$SENTINEL_PASSWORD" ]; then
+      echo "requirepass $SENTINEL_PASSWORD" >> /data/sentinel.conf
+    fi
+    
+    {{- if .Values.externalAccess.enabled }}
+    # External access: announce external IP if configured
+    {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
+    {{- if gt (len $loadBalancerIPs) 0 }}
+    case $POD_INDEX in
+    {{- range $i, $ip := $loadBalancerIPs }}
+      {{ $i }})
+        SENTINEL_ANNOUNCE_IP="{{ $ip }}"
+        ;;
+    {{- end }}
+      *)
+        echo "Warning: No external IP configured for pod index $POD_INDEX"
+        SENTINEL_ANNOUNCE_IP=""
+        ;;
+    esac
+    if [ -n "$SENTINEL_ANNOUNCE_IP" ]; then
+      echo "sentinel announce-ip $SENTINEL_ANNOUNCE_IP" >> /data/sentinel.conf
+      echo "sentinel announce-port {{ .Values.externalAccess.service.sentinelPort }}" >> /data/sentinel.conf
+      echo "External access enabled: Sentinel announcing IP $SENTINEL_ANNOUNCE_IP"
+    fi
+    {{- else }}
+    # Internal access: use FQDN
+    echo "sentinel announce-ip $(hostname).{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local" >> /data/sentinel.conf
+    echo "sentinel announce-port {{ .Values.sentinel.port }}" >> /data/sentinel.conf
+    {{- end }}
+    {{- end }}
+    
+    # Wait for local Redis to be ready
+    echo "Waiting for local Redis to be ready..."
+    {{- if .Values.tls.enabled }}
+    {{- if .Values.tls.redis.authClients }}
+    until redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
+    {{- else }}
+    until redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
+    {{- end }}
+    {{- else }}
+    until redis-cli -h 127.0.0.1 -p {{ .Values.redis.port }} -a "$REDIS_PASSWORD" ping 2>/dev/null; do
+    {{- end }}
+      echo "Local Redis not ready, waiting..."
+      sleep 2
+    done
+    echo "Local Redis is ready!"
+    
+    # Determine current master by checking Sentinel or using pod-0 as default
+    {{- if .Values.externalAccess.enabled }}
+    {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
+    {{- if gt (len $loadBalancerIPs) 0 }}
+    # External access enabled: use external IP for pod-0 as initial master
+    MASTER_HOST="{{ index $loadBalancerIPs 0 }}"
+    {{- else }}
+    MASTER_HOST="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+    {{- end }}
+    {{- else }}
+    MASTER_HOST="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+    {{- end }}
+    
+    # Try to get master from existing Sentinel (if any other Sentinel is running)
+    if [ "$POD_INDEX" != "0" ]; then
+      echo "Checking for existing Sentinel..."
+      for i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
+        if [ "$i" != "$POD_INDEX" ]; then
+          OTHER_HOST="{{ include "redis-sentinel.fullname" . }}-$i.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+          # Query Sentinel with authentication if password is set
+          {{- if .Values.tls.enabled }}
+          {{- if .Values.tls.sentinel.authClients }}
+          if [ -n "$SENTINEL_PASSWORD" ]; then
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          else
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          fi
+          {{- else }}
+          if [ -n "$SENTINEL_PASSWORD" ]; then
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          else
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          fi
+          {{- end }}
+          {{- else }}
+          if [ -n "$SENTINEL_PASSWORD" ]; then
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          else
+            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.sentinel.port }} sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
+          fi
+          {{- end }}
+          if [ -n "$SENTINEL_MASTER" ]; then
+            MASTER_HOST=$SENTINEL_MASTER
+            echo "Found master from Sentinel: $MASTER_HOST"
+            break
+          fi
+        fi
+      done
+    fi
+    
+    # Configure Sentinel to monitor the master
+    {{- if .Values.externalAccess.enabled }}
+    # External access: use external port
+    echo "sentinel monitor mymaster $MASTER_HOST {{ .Values.externalAccess.service.redisPort }} {{ .Values.sentinel.quorum }}" >> /data/sentinel.conf
+    {{- else }}
+    echo "sentinel monitor mymaster $MASTER_HOST {{ .Values.redis.port }} {{ .Values.sentinel.quorum }}" >> /data/sentinel.conf
+    {{- end }}
+    
+    echo "Starting Redis Sentinel..."
+    exec redis-sentinel /data/sentinel.conf
+  
+  health-check-redis.sh: |
+    #!/bin/sh
+    set -e
+    
+    # REDIS_PASSWORD is injected from environment (Secret)
+    
+    # Check Redis is responding
+    {{- if .Values.tls.enabled }}
+    {{- if .Values.tls.redis.authClients }}
+    redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    {{- else }}
+    redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    {{- end }}
+    {{- else }}
+    redis-cli -h 127.0.0.1 -p {{ .Values.redis.port }} -a "$REDIS_PASSWORD" ping 2>/dev/null
+    {{- end }}
+  
+  health-check-sentinel.sh: |
+    #!/bin/sh
+    set -e
+    
+    # SENTINEL_PASSWORD is injected from environment (Secret)
+    
+    # Check Sentinel is responding
+    {{- if .Values.tls.enabled }}
+    {{- if .Values.tls.sentinel.authClients }}
+    if [ -n "$SENTINEL_PASSWORD" ]; then
+      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    else
+      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    fi
+    {{- else }}
+    if [ -n "$SENTINEL_PASSWORD" ]; then
+      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    else
+      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    fi
+    {{- end }}
+    {{- else }}
+    if [ -n "$SENTINEL_PASSWORD" ]; then
+      redis-cli -h 127.0.0.1 -p {{ .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" ping 2>/dev/null
+    else
+      redis-cli -h 127.0.0.1 -p {{ .Values.sentinel.port }} ping 2>/dev/null
+    fi
+    {{- end }}
+

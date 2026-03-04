@@ -1,0 +1,283 @@
+
+  ╦  ╦╔╗╔╔═╗═╗ ╦╔╦╗
+  ╚╗╔╝║║║║╣ ╔╩╦╝ ║    Workflow Orchestration Platform
+   ╚╝ ╝╚╝╚═╝╩ ╚═ ╩    v{{ .Chart.Version }} (app: {{ .Chart.AppVersion }})
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ DEPLOYED COMPONENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Core Services:
+{{- if .Values.orchestrator.enabled }}
+   [x] Orchestrator       {{ .Values.orchestrator.replicaCount }} replica(s)
+{{- end }}
+{{- if .Values.execution.enabled }}
+   [x] Execution          {{ .Values.execution.replicaCount }} replica(s)
+{{- end }}
+{{- if index .Values "worker-inbox" "enabled" }}
+   [x] Worker-Inbox       {{ index .Values "worker-inbox" "replicaCount" }} replica(s)
+{{- end }}
+{{- if index .Values "worker-outbox" "enabled" }}
+   [x] Worker-Outbox      {{ index .Values "worker-outbox" "replicaCount" }} replica(s)
+{{- end }}
+{{- if .Values.orchestrator.initializer.enabled }}
+   [x] Initializer        (init job)
+{{- end }}
+
+ Infrastructure:
+{{- if .Values.dapr.enabled }}
+   [x] Dapr               {{ if .Values.dapr.global.ha.enabled }}HA mode{{ else }}single mode{{ end }}
+{{- end }}
+{{- if .Values.postgres.enabled }}
+   [x] PostgreSQL          {{ .Values.postgres.replicaCount }} replica(s)
+{{- end }}
+{{- if index .Values "redis-sentinel" "enabled" }}
+   [x] Redis Sentinel      {{ index .Values "redis-sentinel" "replicaCount" }} replica(s)
+{{- end }}
+{{- if .Values.vault.enabled }}
+   [x] HashiCorp Vault
+{{- end }}
+{{- if .Values.global.externalVault.enabled }}
+   [x] External Vault     {{ .Values.global.externalVault.address }}
+{{- end }}
+
+ Observability:
+{{- if index .Values "opentelemetry-collector" "enabled" }}
+   [x] OpenTelemetry Collector
+{{- end }}
+{{- if index .Values "kube-prometheus-stack" "enabled" }}
+   [x] Prometheus + Grafana
+{{- end }}
+{{- if .Values.openobserve.enabled }}
+   [x] OpenObserve
+{{- end }}
+{{- if index .Values "dapr-dashboard" "enabled" }}
+   [x] Dapr Dashboard
+{{- end }}
+
+{{- $hasDevTools := or .Values.pgAdmin.enabled .Values.redisInsight.enabled .Values.mockoon.enabled }}
+{{- if $hasDevTools }}
+ Development Tools:
+{{- if .Values.pgAdmin.enabled }}
+   [x] pgAdmin
+{{- end }}
+{{- if .Values.redisInsight.enabled }}
+   [x] RedisInsight
+{{- end }}
+{{- if .Values.mockoon.enabled }}
+   [x] Mockoon
+{{- end }}
+{{- end }}
+
+{{- $hasHPA := or .Values.orchestrator.autoscaling.enabled .Values.execution.autoscaling.enabled (index .Values "worker-inbox" "autoscaling" "enabled") (index .Values "worker-outbox" "autoscaling" "enabled") }}
+{{- if $hasHPA }}
+
+ Autoscaling (HPA):
+{{- if .Values.orchestrator.autoscaling.enabled }}
+   [x] Orchestrator       {{ .Values.orchestrator.autoscaling.minReplicas }}-{{ .Values.orchestrator.autoscaling.maxReplicas }} replicas
+{{- end }}
+{{- if .Values.execution.autoscaling.enabled }}
+   [x] Execution          {{ .Values.execution.autoscaling.minReplicas }}-{{ .Values.execution.autoscaling.maxReplicas }} replicas
+{{- end }}
+{{- if index .Values "worker-inbox" "autoscaling" "enabled" }}
+   [x] Worker-Inbox       {{ index .Values "worker-inbox" "autoscaling" "minReplicas" }}-{{ index .Values "worker-inbox" "autoscaling" "maxReplicas" }} replicas
+{{- end }}
+{{- if index .Values "worker-outbox" "autoscaling" "enabled" }}
+   [x] Worker-Outbox      {{ index .Values "worker-outbox" "autoscaling" "minReplicas" }}-{{ index .Values "worker-outbox" "autoscaling" "maxReplicas" }} replicas
+{{- end }}
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ACCESSING SERVICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{{- if .Values.orchestrator.enabled }}
+
+ Orchestrator:
+{{- if .Values.orchestrator.ingress.enabled }}
+{{- range $host := .Values.orchestrator.ingress.hosts }}
+{{- range .paths }}
+   URL: http{{ if $.Values.orchestrator.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else }}
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-orchestrator 5000:5000
+   http://localhost:5000
+{{- end }}
+   Health: /live (liveness) | /ready (readiness)
+{{- end }}
+{{- if .Values.execution.enabled }}
+
+ Execution:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-execution 5001:5000
+   http://localhost:5001
+   Health: /live (liveness) | /ready (readiness)
+{{- end }}
+{{- if index .Values "worker-inbox" "enabled" }}
+
+ Worker-Inbox:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-worker-inbox 5002:5000
+   http://localhost:5002
+   Health: /health
+{{- end }}
+{{- if index .Values "worker-outbox" "enabled" }}
+
+ Worker-Outbox:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-worker-outbox 5003:5000
+   http://localhost:5003
+   Health: /health
+{{- end }}
+{{- if .Values.vault.enabled }}
+
+ Vault:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-vault 8200:8200
+   http://localhost:8200
+{{- end }}
+{{- if index .Values "kube-prometheus-stack" "enabled" }}
+
+ Grafana:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-grafana 3000:80
+   http://localhost:3000
+   Password: kubectl get secret -n {{ .Release.Namespace }} {{ include "vnext.fullname" . }}-grafana -o jsonpath="{.data.admin-password}" | base64 -d
+
+ Prometheus:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-kube-prometheus-stack-prometheus 9090:9090
+   http://localhost:9090
+{{- end }}
+{{- if index .Values "dapr-dashboard" "enabled" }}
+
+ Dapr Dashboard:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/dapr-dashboard 8080:8080
+   http://localhost:8080
+{{- end }}
+{{- if .Values.pgAdmin.enabled }}
+
+ pgAdmin:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-pgadmin 8080:80
+   http://localhost:8080
+{{- end }}
+{{- if .Values.redisInsight.enabled }}
+
+ RedisInsight:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-redisinsight 8001:8001
+   http://localhost:8001
+{{- end }}
+{{- if .Values.openobserve.enabled }}
+
+ OpenObserve:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-openobserve 5080:5080
+   http://localhost:5080
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECURITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{{- if .Values.dapr.global.mtls.enabled }}
+ [x] Dapr mTLS: ENABLED
+{{- else }}
+ [ ] Dapr mTLS: DISABLED (enable for production)
+{{- end }}
+{{- if .Values.global.securityContext.runAsNonRoot }}
+ [x] Non-root containers: ENABLED
+{{- else }}
+ [ ] Non-root containers: DISABLED (enable for production)
+{{- end }}
+{{- if .Values.global.securityContext.readOnlyRootFilesystem }}
+ [x] Read-only root filesystem: ENABLED
+{{- end }}
+ Environment: {{ .Values.global.dotnetEnv.ASPNETCORE_ENVIRONMENT }}
+ Telemetry: {{ if .Values.global.telemetry.enabled }}ENABLED{{ else }}DISABLED{{ end }}
+
+ Credentials are stored in Kubernetes secrets. To retrieve them:
+{{- if .Values.postgres.enabled }}
+   PostgreSQL: kubectl get secret -n {{ .Release.Namespace }} {{ include "vnext.fullname" . }}-postgres -o jsonpath="{.data.postgres-password}" | base64 -d
+{{- end }}
+{{- if index .Values "kube-prometheus-stack" "enabled" }}
+   Grafana:    kubectl get secret -n {{ .Release.Namespace }} {{ include "vnext.fullname" . }}-grafana -o jsonpath="{.data.admin-password}" | base64 -d
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ QUICK REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Status & Monitoring:
+   kubectl get pods -n {{ .Release.Namespace }}
+   kubectl get svc -n {{ .Release.Namespace }}
+   kubectl get pvc -n {{ .Release.Namespace }}
+   kubectl top pods -n {{ .Release.Namespace }}
+
+ Logs:
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=orchestrator -f
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=execution -f
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --all-containers --tail=100
+
+ Dapr:
+   kubectl get components -n {{ .Release.Namespace }}
+   kubectl get configurations -n {{ .Release.Namespace }}
+
+ Helm:
+   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+   helm get values {{ .Release.Name }} -n {{ .Release.Namespace }}
+   helm history {{ .Release.Name }} -n {{ .Release.Namespace }}
+   helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ .Release.Namespace }} -f values.yaml
+   helm rollback {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ POST-INSTALL STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ 1. Wait for pods:
+    kubectl wait --for=condition=ready pod -n {{ .Release.Namespace }} --all --timeout=300s
+
+ 2. Verify deployment:
+    kubectl get pods,svc,pvc -n {{ .Release.Namespace }}
+{{- if .Values.orchestrator.enabled }}
+
+ 3. Test orchestrator:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-orchestrator 5000:5000
+    curl http://localhost:5000/live
+{{- end }}
+{{- if not .Values.orchestrator.ingress.enabled }}
+
+ 4. Configure ingress for external access (if needed):
+    helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ .Release.Namespace }} -f values.yaml
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Pod issues:
+   kubectl describe pod <pod-name> -n {{ .Release.Namespace }}
+   kubectl logs <pod-name> -n {{ .Release.Namespace }} --all-containers
+{{- if .Values.postgres.enabled }}
+
+ Database:
+   kubectl exec -n {{ .Release.Namespace }} -it <postgres-pod> -- psql -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}
+{{- end }}
+{{- if index .Values "redis-sentinel" "enabled" }}
+
+ Redis:
+   kubectl exec -n {{ .Release.Namespace }} -it <redis-pod> -- redis-cli ping
+{{- end }}
+{{- if .Values.dapr.enabled }}
+
+ Dapr sidecar:
+   kubectl logs <pod-name> -c daprd -n {{ .Release.Namespace }}
+{{- end }}
+
+ Events:
+   kubectl get events -n {{ .Release.Namespace }} --sort-by='.lastTimestamp' | tail -20
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Documentation:
+   EN: https://github.com/burgan-tech/vnext-helm-charts/blob/main/charts/vnext/docs/README_EN.md
+   TR: https://github.com/burgan-tech/vnext-helm-charts/blob/main/charts/vnext/docs/README_TR.md
+
+ Support:
+   Email:  mrmustafafidan@gmail.com
+   Issues: https://github.com/burgan-tech/vnext-helm-charts/issues

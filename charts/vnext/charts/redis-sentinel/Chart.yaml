@@ -1,0 +1,19 @@
+apiVersion: v2
+name: redis-sentinel
+description: Redis with Sentinel for high availability - using official Redis image
+type: application
+version: 1.0.0
+appVersion: "7.4.1"
+keywords:
+  - redis
+  - sentinel
+  - high-availability
+  - key-value
+  - cache
+  - database
+home: https://redis.io
+sources:
+  - https://github.com/redis/redis
+maintainers:
+  - name: DevOps Team
+

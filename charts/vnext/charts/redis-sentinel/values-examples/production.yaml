@@ -1,0 +1,67 @@
+# Full Monitoring Configuration
+# Enables both Redis metrics and Sentinel metrics
+
+# OpenShift compatibility
+openshift:
+  enabled: true
+
+replicaCount: 3
+
+# Auto-generate passwords
+redis:
+  password: ""
+  persistence:
+    enabled: true
+    size: 10Gi
+
+sentinel:
+  password: ""
+  quorum: 2
+
+# Redis Exporter (Sidecar)
+# Monitors: Redis data metrics (connections, memory, commands, etc.)
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+  podAnnotations:
+    enabled: false  # Use ServiceMonitor instead
+
+# Sentinel Exporter (External Deployment)
+# Monitors: Sentinel health metrics (master status, failover, sentinel health)
+sentinelExporter:
+  enabled: true
+  replicas: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+  podAnnotations:
+    enabled: false  # Use ServiceMonitor instead
+
+# Pod anti-affinity
+# Pod anti-affinity configuration
+# Leave as {} to use default soft anti-affinity with matchLabels
+# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+affinity: {}
+
+# Security context
+# For OpenShift compatibility, leave these empty to auto-assign UIDs/GIDs
+# For standard Kubernetes, you can set specific values:
+# runAsUser: 999
+# runAsGroup: 999
+# fsGroup: 999
+securityContext:
+  runAsNonRoot: true
+  # Uncomment below for non-OpenShift environments if needed:
+  # runAsUser: 999
+  # runAsGroup: 999
+  # fsGroup: 999
+

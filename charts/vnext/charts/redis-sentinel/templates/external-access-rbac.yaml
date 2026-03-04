@@ -1,0 +1,45 @@
+{{- if .Values.externalAccess.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-external-access-manager
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-access-enabler
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-external-access-manager
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-access-enabler
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "redis-sentinel.fullname" . }}-external-access-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "redis-sentinel.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+

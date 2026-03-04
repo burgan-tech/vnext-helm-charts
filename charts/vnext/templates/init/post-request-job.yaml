@@ -1,0 +1,40 @@
+{{- if .Values.orchestrator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vnext.fullname" . }}-component-publisher
+  labels:
+    app.kubernetes.io/name: {{ include "vnext.name" . }}-component-publisher
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: component-publisher
+          image: "alpine/curl:latest"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VNEXT_INIT_URL
+              value: "http://{{ include "vnext.fullname" . }}-orchestrator-initializer:{{ .Values.orchestrator.initializer.service.port }}"
+            - name: APP_DOMAIN
+              value: "{{ .Values.global.appDomain }}"
+            - name: VNEXT_COMPONENT_VERSION
+              value: "{{ .Values.orchestrator.initializer.envConfig.VNEXT_COMPONENT_VERSION }}"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              curl -sX POST "$VNEXT_INIT_URL/api/package/runtime/publish" \
+              -H "Content-Type: application/json" \
+              -d "{\"version\": \"${VNEXT_COMPONENT_VERSION}\", \"appDomain\": \"${APP_DOMAIN}\"}" \
+              --fail
+
+              if [ $? -ne 0 ]; then
+                echo "Init post request failed!"
+                exit 1
+              fi
+{{- end }}

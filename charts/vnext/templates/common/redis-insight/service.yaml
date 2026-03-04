@@ -1,0 +1,18 @@
+{{- if and ((index .Values "redis-sentinel").enabled) (.Values.redisInsight.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-redis-insight
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: redisInsight
+spec:
+  type: {{ .Values.redisInsight.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: redisInsight
+  ports:
+    - name: http
+      port: 5540
+      targetPort: http
+{{- end -}}

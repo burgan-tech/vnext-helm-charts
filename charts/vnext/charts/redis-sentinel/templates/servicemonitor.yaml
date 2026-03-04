@@ -1,0 +1,32 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.metrics.serviceMonitor.namespace }}
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "redis-sentinel.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.metrics.serviceMonitor.interval }}
+    path: /metrics
+    {{- with .Values.metrics.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.metrics.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+{{- end }}
+

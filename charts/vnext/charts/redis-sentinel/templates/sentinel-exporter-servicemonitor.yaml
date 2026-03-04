@@ -1,0 +1,26 @@
+{{- if and .Values.sentinelExporter.enabled .Values.sentinelExporter.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-sentinel-exporter
+  namespace: {{ default .Release.Namespace .Values.sentinelExporter.serviceMonitor.namespace }}
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel-exporter
+    {{- with .Values.sentinelExporter.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "redis-sentinel.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sentinel-exporter
+  endpoints:
+  - port: http-metrics
+    interval: {{ .Values.sentinelExporter.serviceMonitor.interval }}
+    path: /metrics
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+{{- end }}
+

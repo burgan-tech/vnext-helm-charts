@@ -1,0 +1,54 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: postgres
+spec:
+  type: {{ .Values.postgres.service.type }}
+  {{- if and (eq .Values.postgres.service.type "LoadBalancer") (not (empty .Values.postgres.service.loadBalancerIP)) }}
+  loadBalancerIP: {{ .Values.postgres.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (or (eq .Values.postgres.service.type "LoadBalancer") (eq .Values.postgres.service.type "NodePort")) (not (empty .Values.postgres.service.externalTrafficPolicy)) }}
+  externalTrafficPolicy: {{ .Values.postgres.service.externalTrafficPolicy | quote }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.service.targetPort }}
+      protocol: TCP
+      name: postgresql
+    - name: metrics
+      port: 9187
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    {{- include "vnext.selectorLabels" . | nindent 4 }}
+    app: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-postgres-headless
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: postgres
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.service.targetPort }}
+      protocol: TCP
+      name: postgresql
+    - name: metrics
+      port: 9187
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    {{- include "vnext.selectorLabels" . | nindent 4 }}
+    app: postgres
+{{- end }}

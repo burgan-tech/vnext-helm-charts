@@ -1,0 +1,389 @@
+# Default values for Redis Sentinel
+
+# Number of Redis nodes (1 master + N replicas)
+# Minimum 2, recommended 3 for production
+replicaCount: 3
+
+# Docker image configuration
+image:
+  repository: redis
+  pullPolicy: IfNotPresent
+  tag: "8.2.2-alpine"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Authentication
+auth:
+  # Use existing secret for passwords (recommended for production)
+  # If set, this takes precedence over redis.password and sentinel.password
+  # 
+  # IMPORTANT: Secret must exist in the same namespace as this release
+  # Kubernetes does not support cross-namespace secret references
+  # 
+  # Example secret creation:
+  #   kubectl create secret generic my-redis-secret \
+  #     --from-literal=redis-password='my-redis-pass' \
+  #     --from-literal=sentinel-password='my-sentinel-pass' \
+  #     --namespace=my-namespace
+  # 
+  # Then set: existingSecret: "my-redis-secret"
+  existingSecret: ""
+  
+  # Key names within the secret that contain the passwords
+  redis:
+    passwordKey: "redis-password"
+  sentinel:
+    passwordKey: "sentinel-password"
+
+# Redis configuration
+redis:
+  # Redis password for authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Redis port
+  port: 6379
+  
+  # Persistence configuration
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""  # Leave empty to use default storage class, or specify a storage class name
+    accessMode: ReadWriteOnce
+  
+  # Redis server configuration
+  # CRITICAL: Set maxMemory to 80-90% of pod limit (3Gi = 3221MB)
+  # Using 2560mb = 2.5GB = 78% of 3Gi pod limit
+  maxMemory: "2560mb"
+  maxMemoryPolicy: "noeviction"
+  appendonly: true
+  
+  # Extra Redis configuration
+  # Will be appended to redis.conf
+  extraConfig: |
+    # Custom Redis configuration
+    tcp-keepalive 60
+    timeout 0
+
+# TLS/SSL configuration
+tls:
+  # Enable TLS for Redis and Sentinel connections
+  enabled: false
+  
+  # Certificate generation settings
+  certificateSecret: ""  # Use existing secret (if not set, certificates will be auto-generated)
+  
+  # Certificate renewal flag
+  # Set to true to renew/regenerate certificates on next helm upgrade
+  # After upgrade completes, manually set back to false
+  renewCertificates: false
+  
+  # Certificate validity period
+  certificate:
+    # Certificate expiry in days
+    expiryDays: 365
+    
+    # Certificate details
+    subject:
+      country: "US"
+      state: "California"
+      locality: "San Francisco"
+      organization: "MyOrganization"
+      organizationalUnit: "IT"
+      commonName: "redis-sentinel"
+    
+    # Subject Alternative Names (SANs)
+    # Automatically includes: *.svc.cluster.local, localhost, 127.0.0.1
+    additionalSANs: []
+  
+  # TLS settings for Redis
+  redis:
+    # Port for TLS connections (if 0, uses redis.port)
+    port: 6379
+    
+    # Enable TLS for replication
+    replicationEnabled: true
+    
+    # Require client certificates
+    authClients: true
+    
+    # Additional TLS configuration
+    extraConfig: ""
+  
+  # TLS settings for Sentinel
+  sentinel:
+    # Port for TLS connections (if 0, uses sentinel.port)
+    port: 26379
+    
+    # Require client certificates
+    authClients: true
+    
+    # Additional TLS configuration
+    extraConfig: ""
+    
+# Sentinel configuration
+sentinel:
+  # Sentinel password for Sentinel authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Sentinel port
+  port: 26379
+  
+  # Quorum: number of Sentinels that need to agree about master being down
+  # Typically (replicaCount / 2) + 1
+  # For 3 nodes: quorum = 2
+  quorum: 2
+  
+  # Time in milliseconds after which master is considered down
+  downAfterMilliseconds: 30000
+  
+  # Timeout for failover
+  failoverTimeout: 180000
+  
+  # Number of replicas that can sync with new master after failover
+  parallelSyncs: 1
+  
+  # Extra Sentinel configuration
+  extraConfig: |
+    # Custom Sentinel configuration
+
+# Service configuration
+service:
+  type: ClusterIP
+  redis:
+    port: 6379
+    nodePort: ""
+  sentinel:
+    port: 26379
+    nodePort: ""
+  annotations: {}
+
+# External access configuration
+# Allows Redis Sentinel to be accessible from outside Kubernetes
+externalAccess:
+  # Enable external access via LoadBalancer services (one per pod)
+  enabled: false
+  
+  service:
+    # Service type for external access (only LoadBalancer is supported)
+    type: LoadBalancer
+    
+    # Port for Redis service
+    redisPort: 6379
+    
+    # Port for Sentinel service
+    sentinelPort: 26379
+    
+    # Array of LoadBalancer IP addresses, one for each Redis node
+    # Length must match replicaCount
+    # Example: ["10.1.2.11", "10.1.2.12", "10.1.2.13"]
+    loadBalancerIPs: []
+    
+    # Annotations for external access services
+    # MetalLB annotation example:
+    # annotations:
+    #   metallb.universe.tf/address-pool: addresspool-redis
+    annotations: {}
+    
+    # Labels for external access services
+    labels: {}
+    
+    # Load balancer source ranges for security
+    loadBalancerSourceRanges: []
+    
+    # External traffic policy (Cluster or Local)
+    # Local preserves source IP but requires nodes to have the pod
+    externalTrafficPolicy: Cluster
+  
+  # Timeout configuration for pod restart job
+  restartJob:
+    # Helm hook timeout (total time for the entire restart job)
+    # Format: duration string (e.g., "30m", "1800s")
+    # Should be: (podReadyTimeout * replicaCount) + buffer
+    helmHookTimeout: "20m"
+    
+    # Timeout for each pod to become ready after restart (seconds)
+    podReadyTimeout: 300  # 5 minutes per pod
+    
+    # Delay between restarting each pod (seconds)
+    delayBetweenPods: 10
+
+# Resource limits
+resources:
+  redis:
+    limits:
+      cpu: 1000m
+      memory: 3Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  sentinel:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Pod anti-affinity configuration
+# By default, uses soft anti-affinity with matchLabels for instance and name
+# The matchLabels automatically use: app.kubernetes.io/instance and app.kubernetes.io/name
+# 
+# To disable anti-affinity, set: affinity: null
+# To customize, override with your own configuration:
+#
+# Example - Soft anti-affinity (default, automatically applied):
+# affinity:
+#   podAntiAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#     - weight: 100
+#       podAffinityTerm:
+#         labelSelector:
+#           matchLabels:
+#             app.kubernetes.io/instance: my-release
+#             app.kubernetes.io/name: redis-sentinel
+#         namespaces:
+#           - my-namespace
+#         topologyKey: kubernetes.io/hostname
+#
+# Example - Hard anti-affinity:
+# affinity:
+#   podAntiAffinity:
+#     requiredDuringSchedulingIgnoredDuringExecution:
+#     - labelSelector:
+#         matchLabels:
+#           app.kubernetes.io/instance: my-release
+#           app.kubernetes.io/name: redis-sentinel
+#       topologyKey: kubernetes.io/hostname
+affinity: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# OpenShift compatibility
+openshift:
+  # Enable OpenShift-specific configurations
+  # When true: Uses minimal security context (lets SCC handle it)
+  # When false: Uses standard Kubernetes security context
+  enabled: true
+
+# Security context
+# Pod-level security context
+securityContext:
+  # For vanilla Kubernetes (when openshift.enabled=false)
+  kubernetes:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  # For OpenShift (when openshift.enabled=true)
+  # Leave empty to let OpenShift's SCC assign UIDs/GIDs automatically
+  openshift: {}
+
+# Container-level security context
+containerSecurityContext:
+  # For vanilla Kubernetes (when openshift.enabled=false)
+  kubernetes:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: false
+  # For OpenShift (when openshift.enabled=true)
+  openshift:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+
+podSecurityContext:
+  sysctls: []
+
+# Pod management policy
+podManagementPolicy: OrderedReady
+
+# Update strategy
+updateStrategy:
+  type: RollingUpdate
+
+# Redis Exporter for Prometheus metrics
+metrics:
+  enabled: false
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  port: 9121
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  # Use this if you have Prometheus Operator installed
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+  # Pod annotations for standard Prometheus scraping
+  # Use this if you DON'T have Prometheus Operator
+  # NOTE: Enable EITHER serviceMonitor OR podAnnotations, not both
+  # (enabling both will cause duplicate metrics)
+  podAnnotations:
+    enabled: false
+
+# External Sentinel Exporter (separate deployment)
+# Monitors Sentinel service for metrics
+sentinelExporter:
+  enabled: false
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 9121
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  # Use this if you have Prometheus Operator installed
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+  # Pod annotations for standard Prometheus scraping
+  # Use this if you DON'T have Prometheus Operator
+  # NOTE: Enable EITHER serviceMonitor OR podAnnotations, not both
+  # (enabling both will cause duplicate metrics)
+  podAnnotations:
+    enabled: false
+

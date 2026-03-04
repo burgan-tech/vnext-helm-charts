@@ -1,0 +1,61 @@
+{{- if .Values.externalAccess.enabled }}
+{{- $fullName := include "redis-sentinel.fullname" . -}}
+{{- $redisPort := .Values.redis.port -}}
+{{- $sentinelPort := .Values.sentinel.port -}}
+{{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs -}}
+{{- $replicaCount := int .Values.replicaCount -}}
+{{- $serviceAnnotations := .Values.externalAccess.service.annotations -}}
+{{- $serviceLabels := .Values.externalAccess.service.labels -}}
+{{- $loadBalancerSourceRanges := .Values.externalAccess.service.loadBalancerSourceRanges -}}
+{{- $externalTrafficPolicy := .Values.externalAccess.service.externalTrafficPolicy -}}
+
+{{- range $i := until $replicaCount }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-{{ $i }}-external
+  labels:
+    {{- include "redis-sentinel.labels" $ | nindent 4 }}
+    pod: {{ $fullName }}-{{ $i }}
+    {{- with $serviceLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- if $serviceAnnotations }}
+    {{- range $key, $value := $serviceAnnotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if gt (len $loadBalancerIPs) 0 }}
+    {{- if gt (len $loadBalancerIPs) $i }}
+    metallb.universe.tf/allow-shared-ip: "redis-sentinel-{{ index $loadBalancerIPs $i }}"
+    {{- end }}
+    {{- end }}
+spec:
+  type: {{ $.Values.externalAccess.service.type }}
+  externalTrafficPolicy: {{ $externalTrafficPolicy }}
+  ports:
+    - name: tcp-redis
+      protocol: TCP
+      port: {{ $redisPort }}
+      targetPort: redis
+    - name: tcp-sentinel
+      protocol: TCP
+      port: {{ $sentinelPort }}
+      targetPort: sentinel
+  {{- if gt (len $loadBalancerIPs) 0 }}
+  {{- if gt (len $loadBalancerIPs) $i }}
+  loadBalancerIP: {{ index $loadBalancerIPs $i }}
+  {{- end }}
+  {{- end }}
+  {{- if $loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml $loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "redis-sentinel.selectorLabels" $ | nindent 4 }}
+    statefulset.kubernetes.io/pod-name: {{ $fullName }}-{{ $i }}
+{{- end }}
+{{- end }}
+

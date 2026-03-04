@@ -1,0 +1,94 @@
+{{- $workerInbox := index .Values "worker-inbox" }}
+{{- if $workerInbox.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-worker-inbox
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "worker-inbox") | nindent 4 }}
+  {{- if .Values.dapr.enabled }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+  {{- end }}
+spec:
+  {{- if not $workerInbox.autoscaling.enabled }}
+  replicas: {{ $workerInbox.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "worker-inbox") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "vnext.daprAnnotations" (dict "dapr" $workerInbox.dapr "enabled" .Values.global.dapr.enabled "component" "worker-inbox" "appDomain" .Values.global.appDomain) | nindent 8 }}
+        {{- with $workerInbox.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        "helm.sh/release-revision": "{{ .Release.Revision }}"
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "worker-inbox") | nindent 8 }}
+        {{- with $workerInbox.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (coalesce $workerInbox.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      {{- with $workerInbox.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}-worker-inbox
+          image: {{ include "vnext.image" (dict "image" $workerInbox.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ include "vnext.imagePullPolicy" (dict "component" $workerInbox "global" .Values.global) }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "vnext.fullname" . }}-worker-inbox-config
+          {{- $securityContext := include "vnext.securityContext" (dict "component" $workerInbox "global" .Values.global) }}
+          {{- if $securityContext }}
+          securityContext:
+            {{- $securityContext | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $workerInbox.service.port }}
+              protocol: TCP
+          {{- if $workerInbox.livenessProbe }}
+          livenessProbe:
+            {{- include "vnext.livenessProbe" (dict "probe" $workerInbox.livenessProbe "global" .Values.global.probes.liveness) | nindent 12 }}
+          {{- end }}
+          {{- if $workerInbox.readinessProbe }}
+          readinessProbe:
+            {{- include "vnext.readinessProbe" (dict "probe" $workerInbox.readinessProbe "global" .Values.global.probes.readiness) | nindent 12 }}
+          {{- end }}
+          {{- $resources := include "vnext.resources" (dict "component" $workerInbox "global" .Values.global) }}
+          {{- if $resources }}
+          resources:
+            {{- $resources | nindent 12 }}
+          {{- end }}
+          {{- with $workerInbox.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $workerInbox.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $workerInbox.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $workerInbox.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $workerInbox.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

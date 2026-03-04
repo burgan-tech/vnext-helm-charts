@@ -1,0 +1,18 @@
+{{ if .Values.openobserve.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-openobserve
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: openobserve
+spec:
+  type: {{ .Values.openobserve.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: openobserve
+  ports:
+    - name: http
+      port: 5080
+      targetPort: http
+{{- end -}}

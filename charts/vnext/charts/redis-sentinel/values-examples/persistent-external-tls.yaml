@@ -1,0 +1,487 @@
+# Redis Sentinel with Persistent Disk Storage, External Access, and TLS
+# This configuration is optimized for data persistence with disk storage
+# Following Redis official documentation and industry best practices
+
+# Number of Redis nodes (1 master + N replicas)
+# Minimum 2, recommended 3 for production with persistence
+replicaCount: 3
+
+# Docker image configuration
+image:
+  repository: redis
+  pullPolicy: IfNotPresent
+  tag: "8.2.2-alpine"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Authentication
+auth:
+  # Use existing secret for passwords (recommended for production)
+  # If set, this takes precedence over redis.password and sentinel.password
+  # 
+  # IMPORTANT: Secret must exist in the same namespace as this release
+  # Example:
+  #   kubectl create secret generic my-redis-secret \
+  #     --from-literal=redis-password='my-redis-pass' \
+  #     --from-literal=sentinel-password='my-sentinel-pass' \
+  #     --namespace=my-namespace
+  existingSecret: ""
+  redis:
+    passwordKey: "redis-password"
+  sentinel:
+    passwordKey: "sentinel-password"
+
+# Redis configuration
+redis:
+  # Redis password for authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Redis port
+  port: 6379
+  
+  # ========================================
+  # PERSISTENCE CONFIGURATION
+  # ========================================
+  # Best practices for disk-based persistence
+  persistence:
+    enabled: true
+    # Storage size - MUST match existing PVC size (8Gi) due to StatefulSet immutability
+    # To increase size, see manual PVC expansion steps below
+    size: 8Gi
+    storageClass: ""  # Use default StorageClass, or specify (e.g., "gp3", "fast-ssd")
+    accessMode: ReadWriteOnce
+  
+  # ========================================
+  # REDIS SERVER CONFIGURATION
+  # ========================================
+  # Memory management
+  # For persistent storage, set to actual available memory
+  # Leave some headroom for Redis overhead (recommended: 75-80% of pod memory limit)
+  maxMemory: "2400mb"  # 80% of 3GB limit
+  
+  # Memory eviction policy for persistent storage
+  # "noeviction" - Never evict data, return error when memory limit reached
+  # This is correct for persistent storage where you want to keep all data
+  # Alternative: "allkeys-lru" if you want automatic eviction
+  maxMemoryPolicy: "noeviction"
+  
+  # ========================================
+  # APPEND-ONLY FILE (AOF) PERSISTENCE
+  # ========================================
+  # AOF provides better durability than RDB
+  # Every write operation is logged to disk
+  appendonly: true
+  
+  # Extra Redis configuration for persistence
+  # Based on Redis official documentation and production best practices
+  extraConfig: |
+    # ========================================
+    # AOF (Append Only File) Configuration
+    # ========================================
+    # AOF fsync policy - determines when data is written to disk
+    # Options:
+    #   always  - fsync after every write (slowest, most durable)
+    #   everysec - fsync every second (balanced, RECOMMENDED)
+    #   no      - let OS decide when to fsync (fastest, least durable)
+    appendfsync everysec
+    
+    # Rewrite AOF file when it grows by this percentage
+    # This compacts the AOF file to reduce disk space
+    auto-aof-rewrite-percentage 100
+    
+    # Minimum size of AOF file to trigger rewrite
+    auto-aof-rewrite-min-size 64mb
+    
+    # Don't fsync during AOF rewrite to avoid disk I/O spikes
+    no-appendfsync-on-rewrite no
+    
+    # Load truncated AOF file on startup (recovery from incomplete writes)
+    aof-load-truncated yes
+    
+    # Use AOF-RDB hybrid format for faster restarts (Redis 4.0+)
+    # This combines AOF durability with RDB's fast loading
+    aof-use-rdb-preamble yes
+    
+    # ========================================
+    # RDB (Snapshot) Configuration
+    # ========================================
+    # RDB provides point-in-time snapshots as backup
+    # Format: save <seconds> <changes>
+    # Save if at least <changes> keys changed in <seconds>
+    
+    # Save after 15 minutes if at least 1 key changed
+    save 900 1
+    
+    # Save after 5 minutes if at least 10 keys changed
+    save 300 10
+    
+    # Save after 1 minute if at least 10000 keys changed
+    save 60 10000
+    
+    # Compress RDB files (recommended)
+    rdbcompression yes
+    
+    # Add checksum to RDB files for corruption detection
+    rdbchecksum yes
+    
+    # Stop accepting writes if RDB save fails (safety)
+    stop-writes-on-bgsave-error yes
+    
+    # ========================================
+    # Replication Configuration
+    # ========================================
+    # Serve stale data from replicas if master is down
+    replica-serve-stale-data yes
+    
+    # Make replicas read-only (recommended)
+    replica-read-only yes
+    
+    # Use diskless replication for better performance
+    # Master sends RDB directly to replicas over network
+    repl-diskless-sync yes
+    
+    # Delay before starting diskless sync (allow multiple replicas to connect)
+    repl-diskless-sync-delay 5
+    
+    # ========================================
+    # Connection and Performance
+    # ========================================
+    # TCP keepalive to detect dead connections
+    tcp-keepalive 60
+    
+    # Client timeout (0 = disabled)
+    timeout 0
+    
+    # Maximum number of connected clients
+    maxclients 10000
+    
+    # ========================================
+    # Slow Log Configuration
+    # ========================================
+    # Log queries slower than this (microseconds)
+    slowlog-log-slower-than 10000
+    
+    # Maximum length of slow log
+    slowlog-max-len 128
+    
+    # ========================================
+    # Advanced Configuration
+    # ========================================
+    # Disable transparent huge pages (THP) warning
+    # THP can cause latency issues with Redis
+    # (This is just to suppress warning, actual THP should be disabled at OS level)
+    
+    # Active defragmentation (Redis 4.0+)
+    # Helps reduce memory fragmentation over time
+    activedefrag yes
+    
+    # Defragmentation thresholds
+    active-defrag-ignore-bytes 100mb
+    active-defrag-threshold-lower 10
+    active-defrag-threshold-upper 20
+    active-defrag-cycle-min 5
+    active-defrag-cycle-max 75
+
+# TLS/SSL configuration
+tls:
+  # Enable TLS for Redis and Sentinel connections
+  # Set to true for production with external access
+  enabled: true
+  
+  # Certificate generation settings
+  certificateSecret: ""  # Use existing secret (if not set, certificates will be auto-generated)
+  
+  # Certificate validity period
+  certificate:
+    # Certificate expiry in days
+    expiryDays: 3650
+    
+    # Certificate details
+    subject:
+      country: "TR"
+      state: "Istanbul"
+      locality: "Istanbul"
+      organization: "Example Company"
+      organizationalUnit: "DevOps"
+      commonName: "redis-sentinel"
+    
+    # Subject Alternative Names (SANs)
+    # IMPORTANT: Add external IPs here when using TLS with external access
+    additionalSANs:
+      - "10.1.2.21"
+      - "10.1.2.22"
+      - "10.1.2.23"
+  
+  # TLS settings for Redis
+  redis:
+    # Port for TLS connections (if 0, uses redis.port)
+    port: 6379
+    
+    # Enable TLS for replication (must be true when TLS is enabled)
+    replicationEnabled: true
+    
+    # Require client certificates (false = only CA cert needed)
+    authClients: false
+    
+    # Additional TLS configuration
+    extraConfig: ""
+  
+  # TLS settings for Sentinel
+  sentinel:
+    # Port for TLS connections (if 0, uses sentinel.port)
+    port: 26379
+    
+    # Require client certificates
+    authClients: false
+    
+    # Additional TLS configuration
+    extraConfig: ""
+    
+# Sentinel configuration
+sentinel:
+  # Sentinel password for Sentinel authentication
+  # Leave empty to auto-generate a secure random password
+  # In production, use auth.existingSecret instead
+  password: ""
+  
+  # Sentinel port
+  port: 26379
+  
+  # Quorum: number of Sentinels that need to agree about master being down
+  # Typically (replicaCount / 2) + 1
+  # For 3 nodes: quorum = 2
+  quorum: 2
+  
+  # Time in milliseconds after which master is considered down
+  # Recommendation: 30000ms (30 seconds) for persistent storage
+  # Longer timeout reduces false positives during disk I/O spikes
+  downAfterMilliseconds: 30000
+  
+  # Timeout for failover
+  failoverTimeout: 180000
+  
+  # Number of replicas that can sync with new master after failover
+  # Keep at 1 for persistent storage to avoid overloading new master
+  parallelSyncs: 1
+  
+  # Extra Sentinel configuration
+  extraConfig: |
+    # Sentinel-specific configuration for persistent storage
+    
+    # Deny script execution during sentinel mode (security)
+    sentinel deny-scripts-reconfig yes
+
+# Service configuration
+service:
+  type: ClusterIP  # Keep as ClusterIP, external access uses separate LoadBalancer services
+  redis:
+    port: 6379
+    nodePort: ""
+  sentinel:
+    port: 26379
+    nodePort: ""
+  annotations: {}
+
+# External access configuration
+# Allows Redis Sentinel to be accessible from outside Kubernetes
+externalAccess:
+  # Enable external access via LoadBalancer services (one per pod)
+  enabled: true
+  
+  service:
+    # Service type for external access (only LoadBalancer is supported)
+    type: LoadBalancer
+    
+    # Port for Redis service
+    redisPort: 6379
+    
+    # Port for Sentinel service
+    sentinelPort: 26379
+    
+    # IMPORTANT: Configure one IP per pod (must match replicaCount = 3)
+    # Replace with your actual LoadBalancer IPs from MetalLB or cloud provider
+    loadBalancerIPs:
+      - "10.1.2.21"
+      - "10.1.2.22"
+      - "10.1.2.23"
+    
+    # Annotations for external access services
+    # MetalLB configuration example:
+    annotations:
+      metallb.universe.tf/address-pool: addresspool-redis
+      # Note: metallb.universe.tf/allow-shared-ip is AUTOMATICALLY added by template
+      # It's generated as: "redis-sentinel-<LOADBALANCER_IP>"
+    
+    # Labels for external access services
+    labels: {}
+    
+    # Load balancer source ranges for security
+    # Restrict access to specific IP ranges
+    loadBalancerSourceRanges: []
+    # Example - uncomment to restrict access:
+    # loadBalancerSourceRanges:
+    #   - "192.168.1.0/24"    # Office network
+    #   - "10.0.0.0/8"        # Internal networks
+    
+    # External traffic policy (Cluster or Local)
+    # Local preserves source IP but requires nodes to have the pod
+    externalTrafficPolicy: Cluster
+  
+  # Timeout configuration for pod restart job
+  restartJob:
+    # Helm hook timeout (total time for the entire restart job)
+    # Format: duration string (e.g., "30m", "1800s")
+    # Should be: (podReadyTimeout * replicaCount) + buffer
+    # For 3 nodes with persistence: 3 * 7min + 5min buffer = 26min
+    helmHookTimeout: "30m"
+    
+    # Timeout for each pod to become ready after restart (seconds)
+    # Longer timeout for persistent storage (AOF/RDB loading can take time)
+    podReadyTimeout: 420  # 7 minutes per pod
+    
+    # Delay between restarting each pod (seconds)
+    # Longer delay for persistent storage to ensure replication catches up
+    delayBetweenPods: 20
+
+# Resource limits
+# Adjusted for persistent storage workload
+resources:
+  redis:
+    limits:
+      cpu: 2000m  # Increased for AOF writes and RDB snapshots
+      memory: 3Gi  # maxMemory is 80% of this (2400mb)
+    requests:
+      cpu: 200m  # Higher baseline for disk I/O
+      memory: 512Mi
+  sentinel:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Pod disruption budget
+# Important for persistent storage to prevent data loss
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2  # Always keep at least 2 nodes available
+
+# Pod anti-affinity
+# Critical for persistent storage - spread across different nodes
+# Pod anti-affinity configuration
+# Leave as {} to use default soft anti-affinity with matchLabels
+# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+affinity: {}
+
+# Node selector
+# Optional: Select nodes with fast storage
+nodeSelector: {}
+# Example - uncomment to use specific node pool:
+# nodeSelector:
+#   disktype: ssd
+#   workload: database
+
+# Tolerations
+# Optional: Tolerate taints on database nodes
+tolerations: []
+# Example - uncomment for dedicated database nodes:
+# tolerations:
+# - key: "workload"
+#   operator: "Equal"
+#   value: "database"
+#   effect: "NoSchedule"
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# OpenShift compatibility
+openshift:
+  # Enable OpenShift-specific configurations
+  # When true: Uses minimal security context (lets SCC handle it)
+  # When false: Uses standard Kubernetes security context
+  enabled: true
+
+# Security context - not needed with new structure, using openshift flag instead
+# The security context is now managed through the openshift.enabled flag
+# See main values.yaml for full securityContext configuration
+securityContext:
+  runAsNonRoot: true
+  # Uncomment below for non-OpenShift environments if needed:
+  # runAsUser: 999
+  # runAsGroup: 999
+  # fsGroup: 999
+
+podSecurityContext:
+  sysctls: []
+
+# Pod management policy
+# OrderedReady ensures pods start/stop in order (important for persistence)
+podManagementPolicy: OrderedReady
+
+# Update strategy
+# RollingUpdate ensures zero downtime during upgrades
+updateStrategy:
+  type: RollingUpdate
+
+# Redis Exporter for Prometheus metrics
+metrics:
+  enabled: true
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  port: 9121
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+  # Pod annotations for standard Prometheus scraping
+  podAnnotations:
+    enabled: true
+
+# External Sentinel Exporter (separate deployment)
+# Monitors Sentinel service for metrics
+sentinelExporter:
+  enabled: true
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.79.0
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 9121
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    namespace: ""
+    additionalLabels: {}
+  # Pod annotations for standard Prometheus scraping
+  podAnnotations:
+    enabled: true
+

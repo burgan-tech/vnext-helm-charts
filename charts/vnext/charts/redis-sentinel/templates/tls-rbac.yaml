@@ -1,0 +1,39 @@
+{{- if and .Values.tls.enabled (not .Values.tls.certificateSecret) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-tls-manager
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tls-cert-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-tls-manager
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tls-cert-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "redis-sentinel.fullname" . }}-tls-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "redis-sentinel.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+

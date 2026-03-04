@@ -1,0 +1,246 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vnext.fullname" . }}-postgres
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: postgres
+spec:
+  replicas: {{ .Values.postgres.replicaCount }}
+  serviceName: {{ include "vnext.fullname" . }}-postgres-headless
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "vnext.selectorLabels" . | nindent 6 }}
+      app: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.labels" . | nindent 8 }}
+        app: postgres
+        {{- with .Values.postgres.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.postgres.serviceAccount.autoMountServiceAccountToken }}
+      securityContext: 
+        fsGroupChangePolicy: OnRootMismatch
+      {{- if .Values.postgres.initContainers }}
+      initContainers:
+        {{- toYaml .Values.postgres.initContainers | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "vnext.fullname" . }}-postgres
+          image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+          imagePullPolicy: {{ .Values.postgres.image.imagePullPolicy }}
+          args:
+            - -c
+            - 'config_file=/etc/postgresql/postgresql.conf'
+          env:
+            - name: PGDATA
+              value: {{ include "vnext.postgres.pgdataPath" . }}
+            {{- if .Values.postgres.initdb.args }}
+            - name: POSTGRES_INITDB_ARGS
+              value: {{ .Values.postgres.initdb.args | quote }}
+            {{- end }}
+            {{- if .Values.postgres.auth.username }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            {{- end }}
+            {{- if .Values.postgres.auth.database }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            {{- end }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vnext.fullname" . }}-postgres
+                  key: {{ .Values.postgres.auth.secretKeys.passwordKey }}
+            {{- if .Values.postgres.config.postgresqlMaxConnections }}
+            - name: POSTGRES_MAX_CONNECTIONS
+              value: {{ .Values.postgres.config.postgresqlMaxConnections | quote }}
+            {{- end }}
+            {{- if .Values.postgres.config.postgresqlSharedBuffers }}
+            - name: POSTGRES_SHARED_BUFFERS
+              value: {{ .Values.postgres.config.postgresqlSharedBuffers | quote }}
+            {{- end }}
+            {{- if .Values.postgres.config.postgresqlEffectiveCacheSize }}
+            - name: POSTGRES_EFFECTIVE_CACHE_SIZE
+              value: {{ .Values.postgres.config.postgresqlEffectiveCacheSize | quote }}
+            {{- end }}
+            {{- with .Values.postgres.extraEnvVars }}
+{{ toYaml . | indent 12 }}
+            {{- end }}
+          {{- if .Values.postgres.extraEnvVarsSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.postgres.extraEnvVarsSecret }}
+          {{- end }}
+          ports:
+            - name: postgresql
+              containerPort: {{ .Values.postgres.service.targetPort }}
+              protocol: TCP
+          {{- if .Values.postgres.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  pg_isready -U {{ .Values.postgres.auth.username | default "postgres" }} -d {{ .Values.postgres.auth.database | default "vNext_WorkflowDb" }} -h 127.0.0.1 -p {{ .Values.postgres.service.targetPort }}
+            initialDelaySeconds: {{ .Values.postgres.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.postgres.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgres.livenessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.postgres.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.postgres.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.postgres.readinessProbe.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  pg_isready -U {{ .Values.postgres.auth.username | default "postgres" }} -d {{ .Values.postgres.auth.database | default "vNext_WorkflowDb" }} -h 127.0.0.1 -p {{ .Values.postgres.service.targetPort }}
+            initialDelaySeconds: {{ .Values.postgres.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.postgres.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgres.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.postgres.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.postgres.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.postgres.startupProbe.enabled }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  pg_isready -U {{ .Values.postgres.auth.username | default "postgres" }} -d {{ .Values.postgres.auth.database | default "vNext_WorkflowDb" }} -h 127.0.0.1 -p {{ .Values.postgres.service.targetPort }}
+            initialDelaySeconds: {{ .Values.postgres.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.postgres.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgres.startupProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.postgres.startupProbe.successThreshold }}
+            failureThreshold: {{ .Values.postgres.startupProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ include "vnext.postgres.dataDir" . }}
+            - name: config
+              mountPath: /etc/postgresql
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            {{- if or .Values.postgres.initdb.scriptsConfigMap .Values.postgres.initdb.scripts }}
+            - name: custom-init-scripts
+              mountPath: {{ .Values.postgres.initdb.directory }}
+            {{- end }}
+            {{- if .Values.postgres.extraVolumeMounts }}
+            {{- toYaml .Values.postgres.extraVolumeMounts | nindent 12 }}
+            {{- end }}
+        - name: metrics
+          image: "{{ .Values.postgres.metrics.image.registry }}/{{ .Values.postgres.metrics.image.repository }}:{{ .Values.postgres.metrics.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.metrics.image.pullPolicy }}
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://{{ .Values.postgres.auth.username | default "postgres" }}:$(POSTGRES_PASSWORD)@localhost:{{ .Values.postgres.service.targetPort }}/{{ .Values.postgres.auth.database | default "vNext_WorkflowDb" }}?sslmode=disable"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.postgres.auth.existingSecret }}{{ .Values.postgres.auth.existingSecret }}{{ else }}{{ include "vnext.fullname" . }}-postgres{{ end }}
+                  key: {{ .Values.postgres.auth.secretKeys.passwordKey }}
+          ports:
+            - name: metrics
+              containerPort: 9187
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /
+              port: metrics
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+          {{- with .Values.postgres.metrics.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if not .Values.postgres.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.postgres.persistence.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.postgres.persistence.existingClaim }}
+        {{- end }}
+        - name: config
+          configMap:
+            name: {{ default (printf "%s-postgres" (include "vnext.fullname" .)) .Values.postgres.config.existingConfigmap }}
+            optional: true
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if or .Values.postgres.initdb.scriptsConfigMap .Values.postgres.initdb.scripts }}
+        - name: custom-init-scripts
+          configMap:
+            name: {{ include "vnext.postgres.initdb.scriptsCM" . }}
+            defaultMode: 0755
+        {{- end }}
+        {{- if .Values.postgres.extraVolumes }}
+        {{- toYaml .Values.postgres.extraVolumes | nindent 8 }}
+        {{- end }}
+      {{- with .Values.postgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.postgres.persistence.enabled }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  {{- end }}
+  {{- if not .Values.postgres.persistence.existingClaim }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      {{- with .Values.postgres.persistence.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      accessModes:
+        {{- range .Values.postgres.persistence.accessModes }}
+        - {{ . | quote }}
+        {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.postgres.persistence.size | quote }}
+      {{- if .Values.postgres.persistence.storageClass }}
+      {{- if (eq "-" .Values.postgres.persistence.storageClass) }}
+      storageClassName: ""
+      {{- else }}
+      storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+      {{- end }}
+      {{- end }}
+
+  {{- end }}
+{{- end }}

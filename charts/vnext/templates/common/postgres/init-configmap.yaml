@@ -1,0 +1,18 @@
+{{- if .Values.postgres.enabled }}
+{{- if and .Values.postgres.initdb.scripts (not .Values.postgres.initdb.scriptsConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-postgres-init-scripts" (include "vnext.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: postgres
+data: 
+  {{- if .Values.postgres.initdb.scripts }}
+  {{- include "vnext.tplvalues.render" (dict "value" .Values.initdb.scripts "context" .) | nindent 2 }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+

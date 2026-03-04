@@ -1,0 +1,67 @@
+{{ if and ((index .Values "redis-sentinel").enabled) (.Values.redisInsight.enabled) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-redis-insight
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: redisInsight
+spec:
+  replicas: {{ .Values.redisInsight.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vnext.labels" . | nindent 6 }}
+      app: redisInsight
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.labels" . | nindent 8 }}
+        app: redisInsight
+    spec:
+      containers:
+        - name: {{ include "vnext.fullname" . }}-redis-insight
+          image: {{ .Values.redisInsight.image.registry }}/{{ .Values.redisInsight.image.repository }}:{{ .Values.redisInsight.image.tag }}
+          imagePullPolicy: {{ .Values.redisInsight.image.imagePullPolicy }}
+          ports:
+            - containerPort: 5540
+              name: http
+          env:
+            - name: RI_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vnext.fullname" . }}-redis-sentinel
+                  key: redis-password
+            - name: RI_REDIS_HOST
+              value: "{{ include "vnext.fullname" . }}-redis-sentinel-headless"
+            - name: RI_REDIS_PORT
+              value: "6379"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+      volumes:
+        - name: data
+          emptyDir: {}
+
+{{- end -}}

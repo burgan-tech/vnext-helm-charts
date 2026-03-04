@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vnext-prometheus-scrape-config
+type: Opaque
+stringData:
+  additional-scrape-configs.yaml: |
+    - job_name: "workflow-orchestration"
+      static_configs:
+        - targets: ["{{ include "vnext.fullname" . }}-orchestrator:5000"]
+      metrics_path: /metrics
+      scrape_interval: 5s
+
+    - job_name: "workflow-execution"
+      static_configs:
+        - targets: ["{{ include "vnext.fullname" . }}-execution:5000"]
+      metrics_path: /metrics
+      scrape_interval: 5s

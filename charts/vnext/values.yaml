@@ -1,0 +1,1030 @@
+# ==============================================================================
+# GLOBAL CONFIGURATION
+# Configuration shared across all components in the vNext platform
+# ==============================================================================
+
+global:
+  # Application domain identifier - used for naming Dapr apps and service discovery
+  # This value is required and must be unique per app
+  # Example: "banking", "contract", "core"
+  appDomain: "core"
+
+  # External Vault configuration
+  # Use this when connecting to an existing HashiCorp Vault instance
+  externalVault: 
+    # Set to true to use an external Vault instead of the bundled one
+    enabled: false
+    # External Vault server address (e.g., "https://vault.example.com:8200")
+    address: ""
+    # Secret engine name/path in Vault. If empty, will be auto-generated
+    # Format: vnext-<appDomain>-engine
+    secretEngineName: ""
+    vaultToken: "enter-vault-token"
+
+  # Default image pull policy for all components
+  # Options: Always, IfNotPresent, Never
+  imagePullPolicy: IfNotPresent
+  
+  # Image pull secrets for private container registries
+  # Example:
+  #   imagePullSecrets:
+  #     - name: regcred
+  #     - name: another-secret
+  imagePullSecrets: []
+  
+  # -----------------------------------------------------------------------------
+  # .NET Runtime Configuration
+  # Common environment variables applied to all .NET services
+  # -----------------------------------------------------------------------------
+  dotnetEnv:
+    # Disable NuGet package signature verification for faster builds
+    DOTNET_NUGET_SIGNATURE_VERIFICATION: "false"
+    # Use polling for file system changes (required in some container environments)
+    DOTNET_USE_POLLING_FILE_WATCHER: "1"
+    # Indicate running in containerized environment
+    DOTNET_RUNNING_IN_CONTAINER: "true"
+    # Use invariant globalization (reduces image size and improves performance)
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+    # ASP.NET Core environment (Development, Staging, Production)
+    ASPNETCORE_ENVIRONMENT: "Development"
+
+  # -----------------------------------------------------------------------------
+  # Application-level Environment Variables
+  # Global defaults for all vNext services
+  # -----------------------------------------------------------------------------
+  appEnvConfig: {}
+  
+  # -----------------------------------------------------------------------------
+  # Dapr (Distributed Application Runtime) Configuration
+  # Global settings for Dapr service mesh integration
+  # -----------------------------------------------------------------------------
+  dapr:
+    # Enable or disable Dapr sidecar injection globally
+    enabled: true
+    # Communication protocol between app and Dapr sidecar (http or grpc)
+    protocol: "http"
+    # Dapr placement service endpoint for actor placement
+    placementHost: "dapr-placement:50005"
+    # HTTP port for Dapr sidecar API
+    httpPort: "42110"
+    # gRPC port for Dapr sidecar API
+    grpcPort: "42111"
+  
+  # -----------------------------------------------------------------------------
+  # OpenTelemetry Configuration
+  # Global settings for distributed tracing and observability
+  # -----------------------------------------------------------------------------
+  telemetry:
+    # Enable or disable telemetry collection globally
+    enabled: true
+    # External OpenTelemetry collector configuration
+    external:
+      # Set to true to use an external collector instead of the bundled one
+      enabled: false
+      # External collector endpoint (e.g., "http://otel-collector.observability.svc:4317")
+      endpoint: ""
+    # Protocol for telemetry export (grpc or http/protobuf)
+    protocol: "grpc"
+
+  
+  # -----------------------------------------------------------------------------
+  # Database Configuration
+  # Global settings for database connectivity
+  # -----------------------------------------------------------------------------
+  database:
+    # PostgreSQL connection string
+    # Format: Host=<host>;Port=<port>;Database=<db>;Username=<user>;Password=<pass>;
+    # This is used when Vault is disabled. When Vault is enabled, connection details
+    # are retrieved from Vault secrets.
+    connectionString: "Host=vnext-postgres-headless;Port=5432;Database=vNext_WorkflowDb;Username=vnext;Password=changeme;"
+    
+    # ClickHouse configuration for analytics and time-series data
+    # Note: ClickHouse deployment is not included in this chart.
+    # If you want to use ClickHouse, deploy it separately and configure the connection here.
+    clickhouse:
+      # Enable ClickHouse integration for workflow analytics
+      # Set to false if not using ClickHouse
+      enabled: false
+      # ClickHouse connection string (required only if enabled is true)
+      # Example: "Host=clickhouse.analytics.svc;Port=8123;Database=workflow_analytics;Username=default;Password=your-password;"
+      connectionString: ""
+  
+  # -----------------------------------------------------------------------------
+  # Redis Configuration
+  # Settings for Redis/cache connectivity
+  # -----------------------------------------------------------------------------
+  # External Redis endpoint configuration
+  # Use this when connecting to an existing Redis instance or managed service
+  # If empty, will use the bundled Redis Sentinel cluster
+  # Example: "redis.example.com:6379" or "redis-cluster.svc:6379"
+  externalRedis:
+      endpoint: ""
+  
+  # -----------------------------------------------------------------------------
+  # Resource Defaults
+  # Default resource limits and requests applied to all services
+  # Individual services can override these values
+  # -----------------------------------------------------------------------------
+  resources:
+    default:
+      # Maximum resources a container can use
+      limits:
+        cpu: 1000m      # 1 CPU core
+        memory: 2Gi     # 1 gigabyte of RAM
+      # Guaranteed resources for a container
+      requests:
+        cpu: 100m       # 0.1 CPU core
+        memory: 256Mi   # 256 megabytes of RAM
+  
+  # -----------------------------------------------------------------------------
+  # Health Probe Defaults
+  # Default configuration for Kubernetes liveness and readiness probes
+  # Individual services can override these values
+  # -----------------------------------------------------------------------------
+  probes:
+    # Liveness probe determines when to restart a container
+    liveness:
+      # Number of seconds to wait before performing the first probe
+      initialDelaySeconds: 35
+      # How often to perform the probe (in seconds)
+      periodSeconds: 10
+      # Number of consecutive failures before restarting the container
+      failureThreshold: 5
+      # Number of seconds before timing out
+      timeoutSeconds: 30
+    
+    # Readiness probe determines when a container is ready to accept traffic
+    readiness:
+      # Number of seconds to wait before performing the first probe
+      initialDelaySeconds: 35
+      # How often to perform the probe (in seconds)
+      periodSeconds: 10
+      # Number of consecutive failures before marking as not ready
+      failureThreshold: 5
+      # Number of consecutive successes before marking as ready
+      successThreshold: 2
+      # Number of seconds before timing out
+      timeoutSeconds: 30
+  
+  # -----------------------------------------------------------------------------
+  # Security Context
+  # Default security settings applied to all containers
+  # Individual services can override these values
+  # -----------------------------------------------------------------------------
+  securityContext:
+    # Drop all Linux capabilities for enhanced security
+    capabilities:
+      drop:
+      - ALL
+    # Mount root filesystem as read-only for security
+    readOnlyRootFilesystem: true
+    # Run container as non-root user (may need adjustment for some images)
+    runAsNonRoot: false
+
+# ==============================================================================
+# SERVICE ACCOUNT CONFIGURATION
+# Kubernetes service account for pod authentication
+# More information: https://kubernetes.io/docs/concepts/security/service-accounts/
+# ==============================================================================
+serviceAccount:
+  # Create a new service account (set to false to use an existing one)
+  create: true
+  # Automatically mount service account token in pods
+  automount: true
+  # Annotations to add to the service account (useful for IRSA, Workload Identity, etc.)
+  # Example for AWS IAM Role:
+  #   annotations:
+  #     eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/vnext-role
+  annotations: {}
+  # Name of the service account to use (if empty, will be generated)
+  name: ""
+
+# ==============================================================================
+# ORCHESTRATOR SERVICE CONFIGURATION
+# Main workflow orchestration engine that manages workflow execution
+# ==============================================================================
+orchestrator:
+  # Enable or disable the orchestrator service
+  enabled: true
+  
+  # Number of replicas to deploy
+  # For production, consider using 3+ replicas with autoscaling
+  replicaCount: 1
+  
+  # Container image configuration
+  image:
+    # Image repository path
+    repository: ghcr.io/burgan-tech/vnext/orchestrator
+    # Image tag (if empty, defaults to chart appVersion)
+    tag: ""
+    # Image pull policy (if empty, uses global.imagePullPolicy)
+    # Options: Always, IfNotPresent, Never
+    pullPolicy: ""
+  
+  # Init job configuration
+  # Runs database migrations and initialization before the main service starts
+  initializer:
+    # Enable or disable the initialization job
+    enabled: true
+    # Init job container image
+    image:
+      repository: ghcr.io/burgan-tech/vnext/init
+      tag: ""
+    service:
+      type: ClusterIP
+      port: 3000
+    # Environment variables for the init job
+    envConfig:
+      # vNext core runtime version to initialize
+      VNEXT_COMPONENT_VERSION: "0.0.18"
+      NPM_REGISTRY: "https://registry.npmjs.org/"
+    ingress:
+      enabled: false
+      className: ""
+      annotations: {}
+      hosts:
+        - host: initializer.example.local
+          paths:
+            - path: /
+              pathType: Prefix
+      tls: []
+  
+  # Override global image pull secrets for this service if needed
+  # If empty, uses global.imagePullSecrets
+  imagePullSecrets: []
+  
+  # Dapr sidecar configuration for this service
+  dapr:
+    # Enable Dapr sidecar injection for this service
+    enabled: true
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Used for service discovery and pub/sub
+    appId: ""
+    # Port that the application listens on
+    appPort: "5000"
+  
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+  
+  # Use global securityContext, override if needed
+  securityContext: {}
+  
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Ingress configuration for external access
+  ingress:
+    # Enable ingress for external access
+    enabled: false
+    # Ingress class name (e.g., nginx, traefik, alb)
+    className: ""
+    # Ingress annotations
+    # Example for nginx:
+    #   annotations:
+    #     nginx.ingress.kubernetes.io/rewrite-target: /
+    #     cert-manager.io/cluster-issuer: letsencrypt-prod
+    annotations: {}
+    # Ingress hosts configuration
+    hosts:
+      - host: chart-example.local
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+    # TLS configuration
+    # Example:
+    #   tls:
+    #     - secretName: orchestrator-tls
+    #       hosts:
+    #         - orchestrator.example.com
+    tls: []
+  
+  # Uses global.resources.default if empty
+  resources: {}
+  
+  # Health check probes (uses global.probes if not specified)
+  livenessProbe:
+    httpGet:
+      path: /live
+      port: http
+  
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  volumes: []
+  volumeMounts: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # Additional custom environment variables
+  # These will be added to the service's ConfigMap
+  # Example:
+  #   extraEnvConfig:
+  #     MY_CUSTOM_VAR: "value"
+  #     ANOTHER_VAR: "another-value"
+  extraEnvConfig: {}
+  
+  # Application-specific configuration
+  # These environment variables configure the vNext application behavior
+  appEnvConfig:
+    # Enable Vault integration for secrets management
+    # When enabled, database and Redis credentials are fetched from Vault
+    # When disabled, credentials are read from ConfigMap (not recommended for production)
+    Vault__Enabled: "true"
+    # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
+    Logging__LogLevel__Default: "Debug"
+    # SignalR hub configuration for real-time communication
+    SignalR__AppId: "http://localhost:6203"
+
+# ==============================================================================
+# EXECUTION SERVICE CONFIGURATION
+# Workflow execution engine that processes workflow tasks
+# ==============================================================================
+execution:
+  # Enable or disable the execution service
+  enabled: true
+  
+  # Number of replicas to deploy
+  # For production, consider using multiple replicas with autoscaling
+  replicaCount: 1
+
+  notificationBinding:
+    # Default url: "http://mockoon:3001/api/notification/send"
+    url: ""
+    
+  image:
+    repository: ghcr.io/burgan-tech/vnext/execution
+    tag: ""  # Defaults to chart appVersion
+    pullPolicy: ""  # Uses global.imagePullPolicy if empty
+  
+  # Override global settings if needed
+  imagePullSecrets: []
+  
+  # Dapr specific annotations
+  dapr:
+    enabled: true
+    # appId doesn't exist in the values.yaml file, it is generated by the chart
+    appId: ""
+    appPort: "5000"
+  
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+  
+  # Use global securityContext, override if needed
+  securityContext: {}
+  
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Uses global.resources.default if empty
+  resources: {}
+  
+  # Health check probes (uses global.probes if not specified)
+  livenessProbe:
+    httpGet:
+      path: /live
+      port: http
+  
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  volumes: []
+  volumeMounts: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # Additional environment variables for the execution service
+  extraEnvConfig: {}
+  
+  # Application configuration
+  appEnvConfig:
+    # If Vault is enabled, the database and redis configurations won't be created in the configmap.
+    Vault__Enabled: "true"
+    Logging__LogLevel__Default: "Debug"
+
+# ==============================================================================
+# WORKER-INBOX SERVICE CONFIGURATION
+# Worker inbox service that receives messages from the orchestrator
+# ==============================================================================
+worker-inbox:
+  # Enable or disable the worker-inbox service
+  enabled: true
+  
+  # Number of replicas to deploy
+  # For production, consider using 3+ replicas with autoscaling
+  replicaCount: 1
+  
+  # Container image configuration
+  image:
+    # Image repository path
+    repository: ghcr.io/burgan-tech/vnext/inbox
+    # Image tag (if empty, defaults to chart appVersion)
+    tag: ""
+    # Image pull policy (if empty, uses global.imagePullPolicy)
+    # Options: Always, IfNotPresent, Never
+    pullPolicy: ""
+  
+  # Override global image pull secrets for this service if needed
+  # If empty, uses global.imagePullSecrets
+  imagePullSecrets: []
+  
+  # Dapr sidecar configuration for this service
+  dapr:
+    # Enable Dapr sidecar injection for this service
+    enabled: true
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Used for service discovery and pub/sub
+    appId: ""
+    # Port that the application listens on
+    appPort: "5000"
+  
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+  
+  # Use global securityContext, override if needed
+  securityContext: {}
+  
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Uses global.resources.default if empty
+  resources: {}
+  
+  # Health check probes (uses global.probes if not specified)
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+  
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  volumes: []
+  volumeMounts: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # Additional custom environment variables
+  # These will be added to the service's ConfigMap
+  # Example:
+  #   extraEnvConfig:
+  #     MY_CUSTOM_VAR: "value"
+  #     ANOTHER_VAR: "another-value"
+  extraEnvConfig: {}
+  
+  # Application-specific configuration
+  # These environment variables configure the vNext application behavior
+  appEnvConfig:
+    # Enable Vault integration for secrets management
+    # When enabled, database and Redis credentials are fetched from Vault
+    # When disabled, credentials are read from ConfigMap (not recommended for production)
+    Vault__Enabled: "true"
+    # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
+    Logging__LogLevel__Default: "Debug"
+    # SignalR hub configuration for real-time communication
+    SignalR__AppId: "http://localhost:6203"
+
+# ==============================================================================
+# WORKER-OUTBOX SERVICE CONFIGURATION
+# Worker outbox service that sends messages to the orchestrator
+# ==============================================================================
+worker-outbox:
+  # Enable or disable the worker-outbox service
+  enabled: true
+  
+  # Number of replicas to deploy
+  # For production, consider using 3+ replicas with autoscaling
+  replicaCount: 1
+  
+  # Container image configuration
+  image:
+    # Image repository path
+    repository: ghcr.io/burgan-tech/vnext/outbox
+    # Image tag (if empty, defaults to chart appVersion)
+    tag: ""
+    # Image pull policy (if empty, uses global.imagePullPolicy)
+    # Options: Always, IfNotPresent, Never
+    pullPolicy: ""
+  
+  # Override global image pull secrets for this service if needed
+  # If empty, uses global.imagePullSecrets
+  imagePullSecrets: []
+  
+  # Dapr sidecar configuration for this service
+  dapr:
+    # Enable Dapr sidecar injection for this service
+    enabled: true
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Used for service discovery and pub/sub
+    appId: ""
+    # Port that the application listens on
+    appPort: "5000"
+  
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+  
+  # Use global securityContext, override if needed
+  securityContext: {}
+  
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Uses global.resources.default if empty
+  resources: {}
+  
+  # Health check probes (uses global.probes if not specified)
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+  
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  volumes: []
+  volumeMounts: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # Additional custom environment variables
+  # These will be added to the service's ConfigMap
+  # Example:
+  #   extraEnvConfig:
+  #     MY_CUSTOM_VAR: "value"
+  #     ANOTHER_VAR: "another-value"
+  extraEnvConfig: {}
+  
+  # Application-specific configuration
+  # These environment variables configure the vNext application behavior
+  appEnvConfig:
+    # Enable Vault integration for secrets management
+    # When enabled, database and Redis credentials are fetched from Vault
+    # When disabled, credentials are read from ConfigMap (not recommended for production)
+    Vault__Enabled: "true"
+    # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
+    Logging__LogLevel__Default: "Debug"
+    # SignalR hub configuration for real-time communication
+    SignalR__AppId: "http://localhost:6203"
+    
+# ==============================================================================
+# DEPENDENCY CHARTS CONFIGURATION
+# ==============================================================================
+
+# HashiCorp Vault configuration
+vault:
+  enabled: true
+  server:
+    secretShares: 5
+    secretThreshold: 3
+  injector:
+    enabled: true
+  global:
+    openshift: false
+
+
+# Dapr (Distributed Application Runtime)
+dapr:
+  enabled: true
+  global:
+    logAsJson: true
+    ha:
+      enabled: false
+      replicaCount: "3"
+      disruption:
+        minimumAvailable: ""
+        maximumUnavailable: "25%"
+    prometheus:
+      enabled: true
+      port: "9090"
+    mtls:
+      enabled: true
+      workloadCertTTL: 24h
+      allowedClockSkew: 15m
+    daprControlPlaneOs: linux
+  
+  dapr_operator:
+    watchInterval: "3m"
+  
+  runAsNonRoot: true
+  
+  dapr_scheduler:
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: dapr-scheduler
+              topologyKey: topology.kubernetes.io/zone
+  
+  dapr_placement:
+    runAsNonRoot: true
+    enableMetrics: true
+    extraArgs:
+      - "--replicationFactor=100"
+  
+  dapr_sentry:
+    tls:
+      root:
+        ttl: 8760h
+      issuer:
+        ttl: 2160h
+
+# Redis Sentinel configuration
+redis-sentinel:
+  enabled: true
+  replicaCount: 1
+  openshift:
+    enabled: false
+  
+  redis:
+    password: ""
+    extraConfig: |
+      # Performance optimizations
+      tcp-keepalive 60
+      timeout 0
+      # Disable persistence for better performance (adjust for production)
+      appendonly no
+      save ""
+      stop-writes-on-bgsave-error no
+      # Replication optimizations
+      repl-diskless-sync yes
+      appendfsync no
+      repl-diskless-load on-empty-db
+    
+    persistence:
+      enabled: true
+      size: 8Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+
+      maxMemory: "2560mb"
+      maxMemoryPolicy: "noeviction"
+      appendonly: false
+  
+  securityContext:
+    runAsNonRoot: true
+    # Uncomment below for non-OpenShift environments if needed:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  
+  auth:
+    existingSecret: ""
+    redis:
+      passwordKey: "redis-password"
+    sentinel:
+      passwordKey: "sentinel-password"
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: redis-sentinel
+  
+  resources:
+    redis:
+      limits:
+        cpu: 1000m
+        memory: 3Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    sentinel:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  
+  metrics:
+    enabled: true
+
+# ==============================================================================
+# OPTIONAL DEVELOPMENT TOOLS
+# These tools are useful for development and debugging but should be disabled
+# in production environments for security and resource optimization.
+# ==============================================================================
+
+# RedisInsight - Redis GUI tool
+# Web-based GUI for Redis management and monitoring
+redisInsight:
+  # Enable RedisInsight (recommended: true for dev, false for production)
+  enabled: false
+  replicaCount: 1
+  image:
+    registry: docker.io
+    repository: redis/redisinsight
+    tag: "latest"
+    imagePullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+
+# pgAdmin - PostgreSQL GUI tool
+# Web-based administration tool for PostgreSQL
+pgAdmin:
+  # Enable pgAdmin (recommended: true for dev, false for production)
+  enabled: false
+  replicaCount: 1
+  image:
+    registry: docker.io
+    repository: dpage/pgadmin4
+    tag: "latest"
+    imagePullPolicy: IfNotPresent
+    
+  auth:
+    email: "admin@example.com"
+    password: "admin"
+  
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 5Gi
+  service:
+    type: ClusterIP
+
+
+# Mockoon - API Mocking tool
+# Lightweight API mocking server for development and testing
+mockoon:
+  # Enable Mockoon (recommended: true for dev, false for production)
+  enabled: false
+  replicaCount: 1
+  args: ["--data", "/data/migration-api.json", "--port", "3001", "--hostname", "0.0.0.0"]
+  
+  image:
+    registry: docker.io
+    repository: mockoon/cli
+    tag: "latest"
+    imagePullPolicy: IfNotPresent
+  
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    failureThreshold: 3
+    timeoutSeconds: 10
+  
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    failureThreshold: 3
+    timeoutSeconds: 10
+  
+  service:
+    type: ClusterIP
+    port: 3001
+
+# OpenObserve - Observability platform
+# Open-source alternative to Datadog, New Relic, etc.
+# Note: For production, consider using dedicated observability solutions
+openobserve:
+  # Enable OpenObserve (recommended: true for dev, false for production)
+  enabled: false
+  replicaCount: 1
+  
+  image:
+    registry: public.ecr.aws
+    repository: zinclabs/openobserve
+    tag: "latest"
+    imagePullPolicy: IfNotPresent
+  
+  auth:
+    username: "admin@example.com"
+    password: "admin"
+  service:
+    type: ClusterIP
+# OpenTelemetry Collector
+opentelemetry-collector:
+  enabled: true
+  mode: deployment
+  
+  image:
+    repository: "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s"
+    pullPolicy: IfNotPresent
+    tag: ""
+  
+  imagePullSecrets: []
+  
+  configMap:
+    create: false
+    existingName: "opentelemetry-collector-config"
+
+# Prometheus Stack
+kube-prometheus-stack:
+  enabled: true
+  alertmanager:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  prometheus:
+    prometheusSpec:
+      additionalScrapeConfigsSecret:
+        enabled: true
+        name: "vnext-prometheus-scrape-config"
+        key: "additional-scrape-configs.yaml"
+  grafana:
+    defaultDashboardsEnabled: false  # Disable default operator dashboards
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: ALL
+        folder: /tmp/dashboards/Vnext
+        provider:
+          foldersFromFilesStructure: true
+
+# Dapr Dashboard
+dapr-dashboard:
+  enabled: true
+
+# ==============================================================================
+# POSTGRESQL DATABASE CONFIGURATION
+# ==============================================================================
+
+postgres:
+  enabled: true
+  replicaCount: 1
+  
+  image:
+    repository: docker.io/library/postgres
+    tag: "18.0@sha256:073e7c8b84e2197f94c8083634640ab37105effe1bc853ca4d5fbece3219b0e8"
+    imagePullPolicy: Always
+  
+  auth:
+    existingSecret: ""
+    secretKeys:
+      passwordKey: "postgres-password"
+    username: "admin"
+    password: "admin"
+    database: "vNext_WorkflowDb"
+  
+  podLabels: {}
+  
+  serviceAccount:
+    autoMountServiceAccountToken: false
+  
+  service:
+    port: 5432
+    targetPort: 5432
+    type: ClusterIP
+    loadBalancerIP: ""
+    externalTrafficPolicy: ""
+  
+  config:
+    existingConfigmap: ""
+    # PostgreSQL performance tuning
+    postgresqlMaxConnections: 2048
+    postgresqlSharedBuffers: 128MB
+    postgresqlEffectiveCacheSize: 4GB
+    postgresqlWorkMem: 4MB
+    postgresqlMaintenanceWorkMem: 64MB
+    postgresqlWalBuffers: 16MB
+    postgresqlCheckpointCompletionTarget: 0.7
+    postgresqlRandomPageCost: 1.1
+    postgresqlLogStatement: "none"
+    postgresqlLogMinDurationStatement: -1
+    postgresqlSharedPreloadLibraries: ""
+    pgHbaConfig: ""
+    extraConfig: []
+  
+  # Security contexts (commented for flexibility)
+  # podSecurityContext:
+  #   fsGroup: 999
+  # containerSecurityContext:
+  #   allowPrivilegeEscalation: false
+  #   runAsNonRoot: true
+  #   runAsUser: 999
+  #   runAsGroup: 999
+  #   readOnlyRootFilesystem: false
+  #   capabilities:
+  #     drop:
+  #       - ALL
+  
+  initContainers: []
+  
+  initdb:
+    args: ""
+    scripts: {}
+    scriptsConfigMap: ""
+    directory: "/docker-entrypoint-initdb.d/"
+  
+  extraEnvVars: []
+  extraEnvVarsSecret: ""
+  
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  startupProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+    successThreshold: 1
+  
+  resources: {}
+  
+  extraVolumes: []
+  extraVolumeMounts: []
+  
+  metrics:
+    image:
+      registry: quay.io
+      repository: prometheuscommunity/postgres-exporter
+      tag: "v0.18.1@sha256:fb96c4413985d4b23ab02b19022b3d70a86c8e0a62f41ab15ebb6f4673781a5d"
+      pullPolicy: Always
+    
+    resources: {}
+  
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 8Gi
+    existingClaim: ""
+    annotations: {}
+    accessModes:
+      - ReadWriteOnce
+  
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []

@@ -1,0 +1,45 @@
+{{- if and .Values.orchestrator.enabled .Values.orchestrator.initializer.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vnext.fullname" . }}-orchestrator-initializer
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestrator-initializer
+  {{- with .Values.orchestrator.initializer.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.orchestrator.initializer.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.orchestrator.initializer.ingress.tls }}
+  tls:
+    {{- range .Values.orchestrator.initializer.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.orchestrator.initializer.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            {{- with .pathType }}
+            pathType: {{ . }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "vnext.fullname" $ }}-orchestrator-initializer
+                port:
+                  number: {{ $.Values.orchestrator.initializer.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+

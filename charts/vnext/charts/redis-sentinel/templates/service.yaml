@@ -1,0 +1,71 @@
+---
+# Headless service for StatefulSet DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "redis-sentinel.headlessServiceName" . }}
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - name: redis
+    port: {{ .Values.redis.port }}
+    targetPort: redis
+    protocol: TCP
+  - name: sentinel
+    port: {{ .Values.sentinel.port }}
+    targetPort: sentinel
+    protocol: TCP
+  {{- if .Values.metrics.enabled }}
+  - name: metrics
+    port: {{ .Values.metrics.port }}
+    targetPort: metrics
+    protocol: TCP
+  {{- end }}
+  selector:
+    {{- include "redis-sentinel.selectorLabels" . | nindent 4 }}
+---
+# Regular service for Redis
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - name: redis
+    port: {{ .Values.service.redis.port }}
+    targetPort: redis
+    protocol: TCP
+    {{- if and (eq .Values.service.type "NodePort") .Values.service.redis.nodePort }}
+    nodePort: {{ .Values.service.redis.nodePort }}
+    {{- end }}
+  - name: sentinel
+    port: {{ .Values.service.sentinel.port }}
+    targetPort: sentinel
+    protocol: TCP
+    {{- if and (eq .Values.service.type "NodePort") .Values.service.sentinel.nodePort }}
+    nodePort: {{ .Values.service.sentinel.nodePort }}
+    {{- end }}
+  {{- if .Values.metrics.enabled }}
+  - name: metrics
+    port: {{ .Values.metrics.port }}
+    targetPort: metrics
+    protocol: TCP
+  {{- end }}
+  selector:
+    {{- include "redis-sentinel.selectorLabels" . | nindent 4 }}
+

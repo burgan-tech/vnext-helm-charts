@@ -1,0 +1,138 @@
+{{- if .Values.externalAccess.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "redis-sentinel.fullname" . }}-restart-for-external-access
+  labels:
+    {{- include "redis-sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-access-enabler
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- if .Values.externalAccess.restartJob.helmHookTimeout }}
+    "helm.sh/hook-timeout": "{{ .Values.externalAccess.restartJob.helmHookTimeout }}"
+    {{- end }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "redis-sentinel.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: external-access-enabler
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "redis-sentinel.serviceAccountName" . }}
+      {{- if .Values.openshift.enabled }}
+      {{- with .Values.securityContext.openshift }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- else }}
+      {{- with .Values.securityContext.kubernetes }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+      - name: restart-statefulset
+        image: quay.io/openshift/origin-cli:latest
+        {{- if .Values.openshift.enabled }}
+        {{- with .Values.containerSecurityContext.openshift }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- else }}
+        {{- with .Values.containerSecurityContext.kubernetes }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            set -e
+            
+            echo "============================================"
+            echo "External Access Enabler - StatefulSet Restart"
+            echo "============================================"
+            echo ""
+            echo "This job restarts the StatefulSet to enable external IP announcement"
+            echo "for Redis Sentinel after initialization is complete."
+            echo ""
+            
+            STATEFULSET_NAME="{{ include "redis-sentinel.fullname" . }}"
+            NAMESPACE="{{ .Release.Namespace }}"
+            
+            echo "Waiting for all pods to be ready..."
+            
+            # Wait for all pods to be ready (max 10 minutes)
+            MAX_WAIT=600
+            ELAPSED=0
+            REPLICAS={{ .Values.replicaCount }}
+            
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+              READY_PODS=$(kubectl get statefulset ${STATEFULSET_NAME} -n $NAMESPACE -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+              
+              if [ "$READY_PODS" = "$REPLICAS" ]; then
+                echo "✓ All ${REPLICAS} pods are ready"
+                break
+              fi
+              
+              echo "Waiting for pods to be ready... (${READY_PODS}/${REPLICAS} ready, ${ELAPSED}s / ${MAX_WAIT}s)"
+              sleep 10
+              ELAPSED=$((ELAPSED + 10))
+            done
+            
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              echo "⚠ Warning: Not all pods became ready within timeout"
+              echo "Proceeding with restart anyway..."
+            fi
+            
+            echo ""
+            echo "Restarting StatefulSet to enable external IP announcement..."
+            echo ""
+            
+            # Restart the StatefulSet by deleting all pods in sequence
+            # Start from last pod to avoid disrupting the master (pod-0)
+            for i in $(seq $(($REPLICAS - 1)) -1 0); do
+              POD_NAME="${STATEFULSET_NAME}-${i}"
+              echo "Restarting pod: $POD_NAME"
+              
+              kubectl delete pod $POD_NAME -n $NAMESPACE --grace-period=60
+              
+              # Wait for pod to be recreated and ready
+              echo "Waiting for $POD_NAME to be ready..."
+              kubectl wait --for=condition=ready pod/$POD_NAME -n $NAMESPACE --timeout={{ .Values.externalAccess.restartJob.podReadyTimeout }}s || {
+                echo "⚠ Warning: Pod $POD_NAME did not become ready within {{ .Values.externalAccess.restartJob.podReadyTimeout }}s"
+                echo "Continuing with next pod..."
+              }
+              
+              # Delay between pod restarts
+              sleep {{ .Values.externalAccess.restartJob.delayBetweenPods }}
+            done
+            
+            echo ""
+            echo "============================================"
+            echo "✓ External Access Enabled Successfully!"
+            echo "============================================"
+            echo ""
+            echo "All pods have been restarted with external IP announcement."
+            echo "External clients can now connect via LoadBalancer IPs:"
+            {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
+            {{- range $i, $ip := $loadBalancerIPs }}
+            echo "  - Node {{ $i }}:"
+            echo "    Redis:    {{ $ip }}:{{ $.Values.redis.port }}"
+            echo "    Sentinel: {{ $ip }}:{{ $.Values.sentinel.port }}"
+            {{- end }}
+            echo ""
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+{{- end }}
+

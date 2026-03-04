@@ -1,0 +1,6 @@
+apiVersion: v2
+appVersion: 0.15.0
+description: Dapr's dashboard.
+name: dapr-dashboard
+type: application
+version: 0.15.0

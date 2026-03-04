@@ -1,0 +1,69 @@
+# NodePort Configuration for Redis Sentinel
+# Exposes Redis and Sentinel outside the cluster
+
+# OpenShift compatibility
+openshift:
+  enabled: true
+
+# Use NodePort service type
+service:
+  type: NodePort
+  
+  # Redis NodePort configuration
+  redis:
+    port: 6379
+    # Optional: Specify NodePort (must be in range 30000-32767)
+    # Leave empty to let Kubernetes assign automatically
+    nodePort: 30379
+  
+  # Sentinel NodePort configuration  
+  sentinel:
+    port: 26379
+    # Optional: Specify NodePort (must be in range 30000-32767)
+    # Leave empty to let Kubernetes assign automatically
+    nodePort: 30026
+  
+  annotations: {}
+
+# Standard configuration
+replicaCount: 3
+
+# Enable metrics for monitoring
+metrics:
+  enabled: true
+  # If you want metrics also exposed via NodePort, 
+  # they will be accessible on the same NodePort service
+  podAnnotations:
+    enabled: true
+
+# Persistence enabled
+redis:
+  password: ""  # Auto-generate
+  persistence:
+    enabled: true
+    size: 8Gi
+
+# Sentinel configuration
+sentinel:
+  password: ""  # Auto-generate
+  quorum: 2
+
+# Pod anti-affinity
+# Pod anti-affinity configuration
+# Leave as {} to use default soft anti-affinity with matchLabels
+# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+affinity: {}
+
+# Security context
+# For OpenShift compatibility, leave these empty to auto-assign UIDs/GIDs
+# For standard Kubernetes, you can set specific values:
+# runAsUser: 999
+# runAsGroup: 999
+# fsGroup: 999
+securityContext:
+  runAsNonRoot: true
+  # Uncomment below for non-OpenShift environments if needed:
+  # runAsUser: 999
+  # runAsGroup: 999
+  # fsGroup: 999
+

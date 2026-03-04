@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vnext.fullname" . }}-checker-job
+  labels:
+    app.kubernetes.io/name: {{ include "vnext.fullname" . }}-checker
+    {{- include "vnext.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "2"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    spec:
+      containers:
+      - name: checker
+        image: alpine/curl:8.14.1
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Checking services..."
+          {{- if (index .Values "redis-sentinel").enabled }}
+          while ! (curl -s http://{{ include "vnext.fullname" . }}-redis-sentinel-headless:9121/metrics | grep -qi "redis_up 1"); do echo "Redis DOWN" && sleep 5 ; done && echo "Redis UP"
+          {{- end }}
+          {{- if .Values.postgres.enabled }}
+          while ! (curl -s http://{{ include "vnext.fullname" . }}-postgres-headless:9187/metrics | grep -qi "pg_up 1"); do echo "Postgres DOWN" && sleep 5 ; done && echo "Postgres UP"
+          {{- end }}
+          {{- if .Values.vault.enabled }}
+          while ! curl -s http://{{ include "vnext.fullname" . }}-vault:8200/v1/sys/health | grep -qi "\"initialized\":true"; do echo "Vault DOWN" && sleep 5 ; done && echo "Vault UP"
+          {{- end }}
+          {{- if .Values.dapr.enabled }}
+          while ! curl -s -o /dev/null http://dapr-api:9090/healthz; do echo "Dapr Operator DOWN" && sleep 5 ; done && echo "Dapr Operator UP"
+          while ! curl -s -o /dev/null http://dapr-placement-server:9090/healthz; do echo "Dapr Placement DOWN" && sleep 5 ; done && echo "Dapr Placement Server UP"
+          while ! curl -s -o /dev/null http://dapr-sidecar-injector:9090/healthz; do echo "Dapr Sidecar Injector DOWN" && sleep 5 ; done && echo "Dapr Sidecar Injector UP"
+          while ! curl -s -o /dev/null http://dapr-scheduler-server:9090/healthz; do echo "Dapr Scheduler DOWN" && sleep 5 ; done && echo "Dapr Scheduler Server UP"
+          while ! curl -s -o /dev/null http://dapr-sentry:9090/healthz; do echo "Dapr Sentry DOWN" && sleep 5 ; done && echo "Dapr Sentry Server UP"
+          {{- end }}
+          echo "Check complete"
+      restartPolicy: Never

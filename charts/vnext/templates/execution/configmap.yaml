@@ -1,0 +1,57 @@
+{{- if .Values.execution.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-execution-config
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "execution") | nindent 4 }}
+data:
+  # Common environment variables for all .NET services
+  {{- include "vnext.commonEnvVars" . | nindent 2 }}
+  
+  # Global .NET environment variables
+  {{- include "vnext.dotnetEnvVars" .Values.global.dotnetEnv | nindent 2 }}
+
+  # Application-level environment variables
+  {{- include "vnext.appEnvVars" .Values.global.appEnvConfig | nindent 2 }}
+  
+  # Telemetry configuration
+  {{- include "vnext.telemetryEnvVars" (dict "serviceName" (printf "vnext-%s-execution-app" ( .Values.global.appDomain )) "global" .Values.global "context" .) | nindent 2 }}
+  
+  {{- if eq .Values.execution.appEnvConfig.Vault__Enabled "false" }}
+  # Database configuration
+  ConnectionStrings__Default: {{ .Values.global.database.connectionString | quote }}
+  {{- end }}
+  
+  # Redis configuration
+  Redis__Standalone__EndPoints__0: {{ include "vnext.redisEndpoint" . | quote }}
+
+  vNextApi__BaseUrl: {{ printf "http://vnext-%s-orchestrator:5000" ( .Values.global.appDomain ) | quote }}
+
+  APP_DOMAIN: {{ .Values.global.appDomain | quote }}
+  DAPR_APP_ID: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
+  OrchestrationApi__AppId: {{ .Values.orchestrator.dapr.appId | default (printf "vnext-%s-app" .Values.global.appDomain) | quote }}
+
+  # ClickHouse configuration
+  {{- if .Values.global.database.clickhouse.enabled }}
+  ClickHouse__Enabled: "true"
+  ClickHouse__ConnectionString: {{ .Values.global.database.clickhouse.connectionString | quote }}
+  {{- else }}
+  ClickHouse__Enabled: "false"
+  {{- end }}
+  
+  # Component-specific environment variables
+  {{- if .Values.execution.extraEnvConfig }}
+  {{- range $key, $value := .Values.execution.extraEnvConfig }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+  
+  # Application configuration
+  {{- if .Values.execution.appEnvConfig }}
+  {{- range $key, $value := .Values.execution.appEnvConfig }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+  
+{{- end }}

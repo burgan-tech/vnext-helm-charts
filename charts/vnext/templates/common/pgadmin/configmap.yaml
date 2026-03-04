@@ -1,0 +1,27 @@
+{{- if and .Values.pgAdmin.enabled .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-pgadmin-servers
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app: pgadmin4
+data:
+  servers.json: |
+    {
+      "Servers": {
+        "{{ include "vnext.fullname" . }}-Postgres": {
+          "Name": "{{ include "vnext.fullname" . }}-Postgres",
+          "Group": "{{ include "vnext.fullname" . }}",
+          "Host": "{{ include "vnext.fullname" . }}-postgres-headless.{{ .Release.Namespace }}.svc.cluster.local",
+          "Port": 5432,
+          "MaintenanceDB": "{{ .Values.postgres.auth.database }}",
+          "Username": "{{ .Values.postgres.auth.username }}",
+          "ConnectionParameters": {
+                          "sslmode": "prefer",
+                          "connect_timeout": 10
+                      },
+          "PasswordExecCommand": "echo '{{ .Values.postgres.auth.password }}'"        }
+      }
+    }
+{{- end -}}
