@@ -3,10 +3,10 @@ name: Build and Push Docker Image
 on:
   push:
     branches: [master, main]
-    paths: [Dockerfile]
+    paths: [charts/vnext/Dockerfile]
   pull_request:
     branches: [master, main]
-    paths: [Dockerfile]
+    paths: [charts/vnext/Dockerfile]
 
 env:
   REGISTRY: ghcr.io
@@ -34,9 +34,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate version tag
+      - name: Bump and get semantic version
         id: version
-        run: echo "tag=$(date +'%Y%m%d')-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION_FILE=charts/vnext/.version
+          if [[ ! -f "$VERSION_FILE" ]]; then
+            echo "1.0.0" > "$VERSION_FILE"
+          fi
+          VERSION=$(cat "$VERSION_FILE")
+          # Only bump version on push (not on PR)
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            IFS='.' read -r major minor patch <<< "$VERSION"
+            patch=$((patch+1))
+            NEW_VERSION="$major.$minor.$patch"
+            echo "$NEW_VERSION" > "$VERSION_FILE"
+            VERSION="$NEW_VERSION"
+          fi
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata (tags, labels)
         id: meta
