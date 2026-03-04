@@ -5,4 +5,5 @@ RUN apk add --no-cache curl kubectl jq\
   && adduser -D -u 1000 -G vnext -s /bin/sh vnext
 
 USER vnext
+
 WORKDIR /home/vnext
