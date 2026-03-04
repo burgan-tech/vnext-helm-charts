@@ -129,7 +129,7 @@ global:
     default:
       # Maximum resources a container can use
       limits:
-        cpu: 1      # 1 CPU core
+        cpu: 1000m      # 1 CPU core
         memory: 2Gi     # 1 gigabyte of RAM
       # Guaranteed resources for a container
       requests:

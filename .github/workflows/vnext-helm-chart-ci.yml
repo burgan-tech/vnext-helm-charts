@@ -256,6 +256,16 @@ jobs:
           helm push .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz \
             oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
 
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Add appVersion label to OCI artifact
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}:${{ steps.chart_version.outputs.version }}"
+          crane mutate "$IMAGE" \
+            --annotation "org.opencontainers.image.appVersion=${{ steps.app_version.outputs.version }}" \
+            --annotation "org.opencontainers.image.revision=${{ github.sha }}"
+
       - name: Generate release metadata
         run: |
           cat > .helm-packages/metadata.json <<EOF
