@@ -72,7 +72,7 @@ Altyapı ve destekleyici servisler:
 helm dependency build
 
 # Varsayılan değerlerle kur
-helm install vnext . -n vnext --create-namespace
+helm install vnext . -n vnext --create-namespace --timeout 20m
 
 # Tüm pod'ların hazır olmasını bekle
 kubectl wait --for=condition=ready pod -n vnext --all --timeout=300s
@@ -112,6 +112,7 @@ cp values.yaml my-values.yaml
 helm install vnext . \
   -n vnext \
   --create-namespace \
+  --timeout 20m \
   -f my-values.yaml
 ```
 
@@ -926,7 +927,7 @@ kubectl logs -n vnext -l app.kubernetes.io/name=vault
 helm dependency update
 
 # Release'i güncelle
-helm upgrade vnext . -n vnext -f my-values.yaml
+helm upgrade vnext . -n vnext --timeout 20m -f my-values.yaml
 
 # Güncelleme geçmişini görüntüle
 helm history vnext -n vnext

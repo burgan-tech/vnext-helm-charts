@@ -277,11 +277,11 @@ jobs:
             # OCI registry
             helm install vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
               --version ${{ steps.chart_version.outputs.version }} \
-              -n vnext --create-namespace
+              -n vnext --create-namespace --timeout 20m
 
             # From release artifact
             helm install vnext ./vnext-${{ steps.chart_version.outputs.version }}.tgz \
-              -n vnext --create-namespace
+              -n vnext --create-namespace --timeout 20m
             ```
 
             ### Upgrade
@@ -289,7 +289,7 @@ jobs:
             ```bash
             helm upgrade vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
               --version ${{ steps.chart_version.outputs.version }} \
-              -n vnext -f my-values.yaml
+              -n vnext --timeout 20m -f my-values.yaml
             ```
           files: |
             .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz

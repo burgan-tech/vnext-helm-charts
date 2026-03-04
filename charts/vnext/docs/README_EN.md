@@ -72,7 +72,7 @@ Infrastructure and supporting services:
 helm dependency build
 
 # Install with default values
-helm install vnext . -n vnext --create-namespace
+helm install vnext . -n vnext --create-namespace --timeout 20m
 
 # Wait for all pods to be ready
 kubectl wait --for=condition=ready pod -n vnext --all --timeout=300s
@@ -112,6 +112,7 @@ Edit `my-values.yaml` with your environment-specific settings.
 helm install vnext . \
   -n vnext \
   --create-namespace \
+  --timeout 20m \
   -f my-values.yaml
 ```
 
@@ -926,7 +927,7 @@ kubectl logs -n vnext -l app.kubernetes.io/name=vault
 helm dependency update
 
 # Upgrade the release
-helm upgrade vnext . -n vnext -f my-values.yaml
+helm upgrade vnext . -n vnext --timeout 20m -f my-values.yaml
 
 # View upgrade history
 helm history vnext -n vnext
