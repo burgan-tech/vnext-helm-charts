@@ -3,12 +3,14 @@ name: Build and Push Docker Image
 on:
   push:
     branches: [master, main]
+    paths: [Dockerfile]
   pull_request:
     branches: [master, main]
+    paths: [Dockerfile]
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: vault-initializer
 
 jobs:
   build-and-push:
@@ -32,14 +34,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate version tag
+        id: version
+        run: echo "tag=$(date +'%Y%m%d')-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha
-            type=ref,event=branch
+            type=raw,value=${{ steps.version.outputs.tag }},enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
             type=ref,event=pr
 
       - name: Build and push Docker image
