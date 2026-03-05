@@ -265,8 +265,8 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         run: |
-          echo "${{ steps.generate_token.outputs.token }}" | helm registry login ${{ env.REGISTRY }} \
-            --username x-access-token \
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
+            --username ${{ github.actor }} \
             --password-stdin
 
       - name: Push chart to GHCR (OCI)
