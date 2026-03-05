@@ -254,14 +254,14 @@ jobs:
       - name: Push chart to GHCR (OCI)
         run: |
           helm push .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
+            oci://${{ env.REGISTRY }}/${{ github.repository_owner }}
 
       - name: Set up crane
         uses: imjasonh/setup-crane@v0.4
 
       - name: Add appVersion label to OCI artifact
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}:${{ steps.chart_version.outputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.CHART_NAME }}:${{ steps.chart_version.outputs.version }}"
           crane mutate "$IMAGE" \
             --annotation "org.opencontainers.image.appVersion=${{ steps.app_version.outputs.version }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}"
@@ -277,7 +277,7 @@ jobs:
             "appVersionChanged": ${{ steps.app_version.outputs.changed }},
             "bumpType": "${{ steps.bump.outputs.type }}",
             "trigger": "${{ github.event_name }}",
-            "registry": "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}",
+            "registry": "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.CHART_NAME }}",
             "commit": "${{ github.sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
@@ -302,7 +302,7 @@ jobs:
 
             ```bash
             # OCI registry
-            helm install vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
+            helm install vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.CHART_NAME }} \
               --version ${{ steps.chart_version.outputs.version }} \
               -n vnext --create-namespace --timeout 20m
 
@@ -314,7 +314,7 @@ jobs:
             ### Upgrade
 
             ```bash
-            helm upgrade vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \
+            helm upgrade vnext oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.CHART_NAME }} \
               --version ${{ steps.chart_version.outputs.version }} \
               -n vnext --timeout 20m -f my-values.yaml
             ```
