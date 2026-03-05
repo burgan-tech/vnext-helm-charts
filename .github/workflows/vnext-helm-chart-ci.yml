@@ -22,6 +22,17 @@ name: Helm Chart CI/CD
 #       client-payload: '{"app_version": "${{ github.event.release.tag_name }}"}'
 #
 #   Not: HELM_CHARTS_PAT, vnext-helm-charts repo'suna yazma yetkisi olan bir PAT olmalıdır.
+#
+# Branch Protection Bypass:
+#   master branch'inde "require pull request" kuralı varsa, version bump commit'i
+#   için aşağıdakilerden birini yapın:
+#
+#   A) Repository ruleset bypass list'ine github-actions[bot] ekleyin
+#      Settings → Rules → Rulesets → Bypass list → github-actions[bot]
+#
+#   B) GitHub App kullanarak token oluşturun (branch protection bypass destekler)
+#      Gerekli secret'lar: APP_ID ve APP_PRIVATE_KEY
+#      App permissions: Contents (read/write), Metadata (read)
 # ==============================================================================
 
 on:
@@ -135,10 +146,17 @@ jobs:
       packages: write
 
     steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.generate_token.outputs.token }}
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -247,8 +265,8 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
-            --username ${{ github.actor }} \
+          echo "${{ steps.generate_token.outputs.token }}" | helm registry login ${{ env.REGISTRY }} \
+            --username x-access-token \
             --password-stdin
 
       - name: Push chart to GHCR (OCI)
