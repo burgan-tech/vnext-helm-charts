@@ -8,8 +8,12 @@ metadata:
     app.kubernetes.io/component: orchestrator-initializer
   {{- with .Values.orchestrator.initializer.ingress.annotations }}
   annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    {{- with .Values.orchestrator.initializer.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- with .Values.orchestrator.initializer.ingress.className }}
   ingressClassName: {{ . }}
