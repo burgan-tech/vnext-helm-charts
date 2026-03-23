@@ -137,6 +137,8 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-execution-app" .appDo
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-inbox-app" .appDomain) | quote }}
 {{- else if eq .component "worker-outbox" }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-outbox-app" .appDomain) | quote }}
+{{- else if eq .component "db-migrator" }}
+dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-db-migrator-app" .appDomain) | quote }}
 {{- else }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | quote }}
 {{- end }}

@@ -612,7 +612,47 @@ worker-outbox:
     Logging__LogLevel__Default: "Debug"
     # SignalR hub configuration for real-time communication
     SignalR__AppId: "http://localhost:6203"
-    
+
+db-migrator:
+    # Enable or disable the db-migrator service
+  enabled: true
+  
+  # Container image configuration
+  image:
+    # Image repository path
+    repository: ghcr.io/burgan-tech/vnext/db-migrator
+    # Image tag (if empty, defaults to chart appVersion)
+    tag: ""
+    # Image pull policy (if empty, uses global.imagePullPolicy)
+    # Options: Always, IfNotPresent, Never
+    pullPolicy: ""
+
+  # Dapr sidecar configuration for this service
+  dapr:
+    # Enable Dapr sidecar injection for this service
+    enabled: true
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Used for service discovery and pub/sub
+    appId: ""
+    # Port that the application listens on
+    appPort: "5000"
+  
+  podAnnotations: {}
+  podLabels: {}
+
+  # Uses global.resources.default if empty
+  resources: {}
+  
+  # Application-specific configuration
+  # These environment variables configure the vNext application behavior
+  appEnvConfig:
+    # Enable Vault integration for secrets management
+    # When enabled, database and Redis credentials are fetched from Vault
+    # When disabled, credentials are read from ConfigMap (not recommended for production)
+    Vault__Enabled: "true"
+    # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
+    Logging__LogLevel__Default: "Debug"
+
 # ==============================================================================
 # DEPENDENCY CHARTS CONFIGURATION
 # ==============================================================================

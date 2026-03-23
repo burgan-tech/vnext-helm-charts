@@ -1,0 +1,40 @@
+{{- $dbMigrator := index .Values "db-migrator" }}
+{{- if $dbMigrator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vnext.fullname" . }}-db-migrator
+  labels:
+    app.kubernetes.io/name: {{ include "vnext.name" . }}-db-migrator
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "3"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      annotations:
+        {{- include "vnext.daprAnnotations" (dict "dapr" $dbMigrator.dapr "enabled" .Values.global.dapr.enabled "component" "db-migrator" "appDomain" .Values.global.appDomain) | nindent 8 }}
+        {{- with $dbMigrator.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "db-migrator") | nindent 8 }}
+        {{- with $dbMigrator.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: db-migrator
+          image: {{ include "vnext.image" (dict "image" $dbMigrator.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ include "vnext.imagePullPolicy" (dict "component" $dbMigrator "global" .Values.global) }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "vnext.fullname" . }}-db-migrator-config
+          {{- $resources := include "vnext.resources" (dict "component" $dbMigrator "global" .Values.global) }}
+          {{- if $resources }}
+          resources:
+            {{- $resources | nindent 12 }}
+          {{- end }}
+{{- end }}
