@@ -613,6 +613,10 @@ worker-outbox:
     # SignalR hub configuration for real-time communication
     SignalR__AppId: "http://localhost:6203"
 
+# ==============================================================================
+# DB-MIGRATOR JOB CONFIGURATION
+# Db-Migrator creates and migrates database schemas for systems and flows.
+# ==============================================================================
 db-migrator:
     # Enable or disable the db-migrator service
   enabled: true
@@ -634,8 +638,6 @@ db-migrator:
     # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
     # Used for service discovery and pub/sub
     appId: ""
-    # Port that the application listens on
-    appPort: "5000"
   
   podAnnotations: {}
   podLabels: {}

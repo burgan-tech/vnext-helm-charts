@@ -142,8 +142,10 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-db-migrator-app" .app
 {{- else }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | quote }}
 {{- end }}
+{{- if ne .component "db-migrator" }}
 dapr.io/app-port: {{ .dapr.appPort | quote }}
 dapr.io/app-protocol: {{ .dapr.protocol | default "http" | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 
