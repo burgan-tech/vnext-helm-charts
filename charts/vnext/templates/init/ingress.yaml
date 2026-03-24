@@ -6,10 +6,13 @@ metadata:
   labels:
     {{- include "vnext.labels" . | nindent 4 }}
     app.kubernetes.io/component: orchestrator-initializer
-  {{- with .Values.orchestrator.initializer.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    {{- range $key, $value := .Values.orchestrator.initializer.ingress.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
 spec:
   {{- with .Values.orchestrator.initializer.ingress.className }}
   ingressClassName: {{ . }}

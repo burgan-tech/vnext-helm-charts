@@ -1,0 +1,33 @@
+{{- $dbMigrator := index .Values "db-migrator" }}
+{{- if $dbMigrator.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-db-migrator-config
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "db-migrator") | nindent 4 }}
+data:
+  # Common environment variables for all .NET services
+  {{- include "vnext.commonEnvVars" . | nindent 2 }}
+  
+  # Global .NET environment variables
+  {{- include "vnext.dotnetEnvVars" .Values.global.dotnetEnv | nindent 2 }}
+  
+  # Application-level environment variables
+  {{- include "vnext.appEnvVars" .Values.global.appEnvConfig | nindent 2 }}
+  
+  # Telemetry configuration
+  {{- include "vnext.telemetryEnvVars" (dict "serviceName" (printf "vnext-%s-db-migrator" ( .Values.global.appDomain )) "global" .Values.global "context" .) | nindent 2 }}
+  
+  {{- if eq $dbMigrator.appEnvConfig.Vault__Enabled "false" }}
+  # Database configuration
+  ConnectionStrings__Default: {{ .Values.global.database.connectionString | quote }}
+  {{- end }}
+  
+  # Redis configuration
+  Redis__Standalone__EndPoints__0: {{ include "vnext.redisEndpoint" . | quote }}
+
+  APP_DOMAIN: {{ .Values.global.appDomain | quote }}
+  DAPR_APP_ID: {{ printf "vnext-%s-db-migrator-app" ( .Values.global.appDomain ) | quote }}
+  
+{{- end }}
