@@ -302,9 +302,13 @@ orchestrator:
   
   # Uses global.resources.default if empty
   resources: 
-    default:
-      limits:
-        memory: 4Gi
+    limits:
+      cpu: 1000m      # 1 CPU core
+      memory: 4Gi     # 1 gigabyte of RAM
+    # Guaranteed resources for a container
+    requests:
+      cpu: 100m       # 0.1 CPU core
+      memory: 256Mi   # 256 megabytes of RAM
 
   
   # Health check probes (uses global.probes if not specified)
@@ -477,7 +481,14 @@ worker-inbox:
     port: 5000
   
   # Uses global.resources.default if empty
-  resources: {}
+  resources: 
+    limits:
+      cpu: 1000m      # 1 CPU core
+      memory: 4Gi     # 1 gigabyte of RAM
+    # Guaranteed resources for a container
+    requests:
+      cpu: 100m       # 0.1 CPU core
+      memory: 256Mi   # 256 megabytes of RAM
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
