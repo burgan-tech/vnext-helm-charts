@@ -657,7 +657,7 @@ db-migrator:
     # When disabled, credentials are read from ConfigMap (not recommended for production)
     Vault__Enabled: "true"
     # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
-    Logging__LogLevel__Default: "Debug"
+    Logging__LogLevel__Default: "Information"
 
 # ==============================================================================
 # DEPENDENCY CHARTS CONFIGURATION
