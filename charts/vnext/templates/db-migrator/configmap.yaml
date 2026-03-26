@@ -35,5 +35,5 @@ data:
   {{- range $key, $value := $dbMigrator.appEnvConfig }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
-  
+  {{- end }}
 {{- end }}
