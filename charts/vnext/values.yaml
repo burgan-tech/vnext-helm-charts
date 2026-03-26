@@ -301,7 +301,11 @@ orchestrator:
     tls: []
   
   # Uses global.resources.default if empty
-  resources: {}
+  resources: 
+    default:
+      limits:
+        memory: 4Gi
+
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:

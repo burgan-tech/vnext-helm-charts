@@ -29,5 +29,11 @@ data:
 
   APP_DOMAIN: {{ .Values.global.appDomain | quote }}
   DAPR_APP_ID: {{ printf "vnext-%s-db-migrator-app" ( .Values.global.appDomain ) | quote }}
+
+    # Application configuration
+  {{- if $dbMigrator.appEnvConfig }}
+  {{- range $key, $value := $dbMigrator.appEnvConfig }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
   
 {{- end }}
