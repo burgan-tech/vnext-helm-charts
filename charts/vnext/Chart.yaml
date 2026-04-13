@@ -2,8 +2,8 @@ apiVersion: v2
 name: vnext
 description: vNext Workflow Orchestration Platform - A comprehensive microservices-based workflow orchestration system with built-in observability, service mesh, and high availability features
 type: application
-version: 1.0.35
-appVersion: "0.0.46"
+version: 1.0.36
+appVersion: "0.0.47"
 home: https://github.com/burgan-tech/vnext
 sources:
   - https://github.com/burgan-tech/vnext
