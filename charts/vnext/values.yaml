@@ -763,7 +763,7 @@ redis-sentinel:
       storageClass: ""
       accessMode: ReadWriteOnce
 
-      maxMemory: "2560mb"
+      maxMemory: "3072mb"
       maxMemoryPolicy: "noeviction"
       appendonly: false
   
