@@ -4,7 +4,7 @@ dependencies:
   version: 1.0.0
 - name: dapr
   repository: https://dapr.github.io/helm-charts/
-  version: 1.15.7
+  version: 1.16.12
 - name: dapr-dashboard
   repository: https://dapr.github.io/helm-charts/
   version: 0.15.0
@@ -17,5 +17,5 @@ dependencies:
 - name: kube-prometheus-stack
   repository: https://prometheus-community.github.io/helm-charts
   version: 78.4.0
-digest: sha256:4aac50420c141ba0dea9abc3c6d93b09d814638f6736502f95a78df6be7c27d4
-generated: "2025-11-18T12:01:12.464217+03:00"
+digest: sha256:dc9a57e795de51b141917f3d3e20bfef3218eea862aeb6d1ab508a159e082a6a
+generated: "2026-04-16T11:23:37.370657+03:00"

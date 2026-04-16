@@ -22,7 +22,7 @@ dependencies:
   - condition: dapr.enabled
     name: dapr
     repository: https://dapr.github.io/helm-charts/
-    version: 1.15.7
+    version: 1.16.12
   - condition: dapr-dashboard.enabled
     name: dapr-dashboard
     repository: https://dapr.github.io/helm-charts/
