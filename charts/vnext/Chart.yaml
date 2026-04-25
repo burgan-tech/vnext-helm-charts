@@ -41,7 +41,6 @@ dependencies:
     version: 78.4.0
   - condition: kyverno.enabled
     name: kyverno
-    repository: https://kyverno.github.io/kyverno/
     version: 3.7.1
 icon: file://logo.png
 maintainers:
