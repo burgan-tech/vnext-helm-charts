@@ -17,5 +17,8 @@ dependencies:
 - name: kube-prometheus-stack
   repository: https://prometheus-community.github.io/helm-charts
   version: 78.4.0
-digest: sha256:dc9a57e795de51b141917f3d3e20bfef3218eea862aeb6d1ab508a159e082a6a
-generated: "2026-04-16T11:23:37.370657+03:00"
+- name: kyverno
+  repository: https://kyverno.github.io/kyverno/
+  version: 3.7.1
+digest: sha256:a40f8d923b69e01b53a8aadf54eebd5d0f7baa177c042cf3150768f5b52e154d
+generated: "2026-04-25T02:02:00.398703+03:00"

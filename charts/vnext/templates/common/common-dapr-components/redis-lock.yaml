@@ -7,12 +7,20 @@ spec:
   version: v1
   metadata:
     - name: redisHost
-      value: {{ default (printf "%s-redis-sentinel-headless:6379" (include "vnext.fullname" .)) .Values.global.externalRedis.endpoint | quote }}
+      value: {{ include "vnext.redisEndpoint" . | quote }}
     - name: keyPrefix
       value: "vnext"
     - name: redisPassword
       secretKeyRef:
         name: workflow-secret
         key: redis-password
+    - name: sentinelMasterName
+      value: mymaster
+    - name: sentinelPassword
+      secretKeyRef:
+        key: sentinel-password
+        name: workflow-secret
+    - name: failover
+      value: true
 auth:
   secretStore: {{ include "vnext.fullname" . }}-secret
