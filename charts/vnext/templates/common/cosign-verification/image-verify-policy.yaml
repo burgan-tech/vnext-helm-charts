@@ -1,0 +1,44 @@
+{{- if .Values.global.cosign.enabled }}
+{{- if and .Values.global.cosign.keyless .Values.global.cosign.keyless.issuer .Values.global.cosign.keyless.subject }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "vnext.fullname" . }}-verify-images
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Verify vNext Image Signatures
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/description: >-
+      Verifies Cosign keyless signatures on vNext container images
+      using Sigstore/Fulcio OIDC identity before allowing pod creation.
+spec:
+  validationFailureAction: {{ .Values.global.cosign.validationFailureAction }}
+  webhookTimeoutSeconds: 30
+  background: false
+  rules:
+    - name: verify-vnext-images
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace | quote }}
+      verifyImages:
+        {{- range .Values.global.cosign.imagePatterns }}
+        - imageReferences:
+            - {{ . | quote }}
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subject: {{ $.Values.global.cosign.keyless.subject | quote }}
+                    issuer: {{ $.Values.global.cosign.keyless.issuer | quote }}
+                    rekor:
+                      url: {{ $.Values.global.cosign.rekor.url | quote }}
+        {{- end }}
+{{- else }}
+{{- fail "global.cosign.keyless.issuer and global.cosign.keyless.subject are required when cosign verification is enabled" }}
+{{- end }}
+{{- end }}

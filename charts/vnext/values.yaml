@@ -167,6 +167,29 @@ global:
       timeoutSeconds: 30
   
   # -----------------------------------------------------------------------------
+  # Cosign Image Signature Verification
+  # Verifies container image signatures using Sigstore keyless signing
+  # Requires Kyverno to be enabled as the admission controller
+  # -----------------------------------------------------------------------------
+  cosign:
+    # Enable Cosign image signature verification
+    enabled: false
+    # Keyless verification via Sigstore/Fulcio (GitHub Actions OIDC)
+    keyless:
+      # OIDC issuer URL (GitHub Actions default)
+      issuer: "https://token.actions.githubusercontent.com"
+      # Subject pattern - GitHub repo identity
+      subject: "https://github.com/burgan-tech/*"
+    # Sigstore Rekor transparency log URL
+    rekor:
+      url: "https://rekor.sigstore.dev"
+    # Image patterns to verify (defaults to vnext images)
+    imagePatterns:
+      - "ghcr.io/burgan-tech/vnext/*"
+    # Enforcement mode: "Enforce" blocks unsigned images, "Audit" only warns
+    validationFailureAction: "Audit"
+
+  # -----------------------------------------------------------------------------
   # Security Context
   # Default security settings applied to all containers
   # Individual services can override these values
@@ -217,6 +240,9 @@ orchestrator:
     repository: ghcr.io/burgan-tech/vnext/orchestrator
     # Image tag (if empty, defaults to chart appVersion)
     tag: ""
+    # Image digest for immutable reference (e.g., "sha256:abc123...")
+    # When set, tag is ignored and digest is used instead
+    digest: ""
     # Image pull policy (if empty, uses global.imagePullPolicy)
     # Options: Always, IfNotPresent, Never
     pullPolicy: ""
@@ -374,6 +400,7 @@ execution:
   image:
     repository: ghcr.io/burgan-tech/vnext/execution
     tag: ""  # Defaults to chart appVersion
+    digest: ""  # Image digest for immutable reference
     pullPolicy: ""  # Uses global.imagePullPolicy if empty
   
   # Override global settings if needed
@@ -451,6 +478,8 @@ worker-inbox:
     repository: ghcr.io/burgan-tech/vnext/inbox
     # Image tag (if empty, defaults to chart appVersion)
     tag: ""
+    # Image digest for immutable reference
+    digest: ""
     # Image pull policy (if empty, uses global.imagePullPolicy)
     # Options: Always, IfNotPresent, Never
     pullPolicy: ""
@@ -552,6 +581,8 @@ worker-outbox:
     repository: ghcr.io/burgan-tech/vnext/outbox
     # Image tag (if empty, defaults to chart appVersion)
     tag: ""
+    # Image digest for immutable reference
+    digest: ""
     # Image pull policy (if empty, uses global.imagePullPolicy)
     # Options: Always, IfNotPresent, Never
     pullPolicy: ""
@@ -642,6 +673,8 @@ db-migrator:
     repository: ghcr.io/burgan-tech/vnext/db-migrator
     # Image tag (if empty, defaults to chart appVersion)
     tag: ""
+    # Image digest for immutable reference
+    digest: ""
     # Image pull policy (if empty, uses global.imagePullPolicy)
     # Options: Always, IfNotPresent, Never
     pullPolicy: ""
@@ -956,6 +989,11 @@ kube-prometheus-stack:
         folder: /tmp/dashboards/Vnext
         provider:
           foldersFromFilesStructure: true
+
+# Kyverno - Kubernetes Native Policy Engine
+# Used for Cosign image signature verification
+kyverno:
+  enabled: false
 
 # Dapr Dashboard
 dapr-dashboard:

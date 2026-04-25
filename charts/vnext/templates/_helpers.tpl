@@ -92,12 +92,16 @@ Usage: {{ include "vnext.imagePullPolicy" (dict "component" .Values.orchestrator
 {{- end }}
 
 {{/*
-Get image reference
+Get image reference (supports both tag and digest)
 Usage: {{ include "vnext.image" (dict "image" .Values.orchestrator.image "defaultTag" .Chart.AppVersion) }}
 */}}
 {{- define "vnext.image" -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" .image.repository .image.digest -}}
+{{- else -}}
 {{- $tag := .image.tag | default .defaultTag -}}
 {{- printf "%s:%s" .image.repository $tag -}}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -329,6 +333,16 @@ Validate required values
   {{- end -}}
 {{- end -}}
 
+{{/* Validate Cosign keyless configuration when enabled */}}
+{{- if .Values.global.cosign.enabled -}}
+  {{- if not .Values.global.cosign.keyless.issuer -}}
+    {{- $messages = append $messages "global.cosign.keyless.issuer is required when cosign verification is enabled" -}}
+  {{- end -}}
+  {{- if not .Values.global.cosign.keyless.subject -}}
+    {{- $messages = append $messages "global.cosign.keyless.subject is required when cosign verification is enabled" -}}
+  {{- end -}}
+{{- end -}}
+
 {{/* Output validation errors if any */}}
 {{- if $messages -}}
 {{- printf "\nVALUES VALIDATION ERRORS:\n" -}}
@@ -341,13 +355,21 @@ Validate required values
 
 {{/*
 Get Redis endpoint with fallback
+Generates comma-separated sentinel host list based on replicaCount
 Usage: {{ include "vnext.redisEndpoint" . }}
 */}}
 {{- define "vnext.redisEndpoint" -}}
 {{- if .Values.global.externalRedis.endpoint -}}
 {{- .Values.global.externalRedis.endpoint -}}
 {{- else -}}
-{{- printf "%s-redis-sentinel-headless:6379" (include "vnext.fullname" .) -}}
+{{- $fullName := include "vnext.fullname" . -}}
+{{- $replicaCount := int (index .Values "redis-sentinel" "replicaCount") -}}
+{{- $port := int (index .Values "redis-sentinel" "sentinel" "port") -}}
+{{- $headless := printf "%s-redis-sentinel-headless" $fullName -}}
+{{- range $i := until $replicaCount -}}
+{{- if $i }},{{ end -}}
+{{- printf "%s-redis-sentinel-%d.%s:%d" $fullName $i $headless $port -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
