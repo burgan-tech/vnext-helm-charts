@@ -3,9 +3,9 @@ kind: Subscription
 metadata:
   name: {{ include "vnext.fullname" . }}-definition-component-published-subscription
   annotations:
-  "helm.sh/hook": post-install,post-upgrade
-  "helm.sh/hook-weight": "3"
-  "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "3"
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   topic: definition.component.published
   route: /api/v1/utilities/cache/component-published
