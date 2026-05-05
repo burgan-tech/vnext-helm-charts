@@ -26,7 +26,7 @@ spec:
         {{- with $workerInbox.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        "helm.sh/release-revision": "{{ .Release.Revision }}"
+        "checksum/config": {{ include (print $.Template.BasePath "/worker-inbox/configmap.yaml") . | sha256sum }}
       labels:
         {{- include "vnext.componentLabels" (dict "context" . "component" "worker-inbox") | nindent 8 }}
         {{- with $workerInbox.podLabels }}
