@@ -57,7 +57,12 @@ redis:
   # Redis server configuration
   # CRITICAL: Set maxMemory to 80-90% of pod limit (3Gi = 3221MB)
   # Using 2560mb = 2.5GB = 78% of 3Gi pod limit
-  maxMemory: "2560mb"
+  # If maxMemoryRatio is set, maxMemory will be calculated as maxMemoryRatio * redis container limit
+  maxMemoryRatio: 0.78
+
+  # If maxMemory is set, maxMemoryRatio will be ignored
+  # maxMemory: "2560mb"
+  maxMemory: ""
   maxMemoryPolicy: "noeviction"
   appendonly: true
   
@@ -233,7 +238,10 @@ resources:
 # Pod disruption budget
 podDisruptionBudget:
   enabled: true
-  minAvailable: 2
+  # Prefer limiting disruptions to 1 pod at a time
+  maxUnavailable: 1
+  # For backward compatibility, minAvailable can still be set instead of maxUnavailable
+  # minAvailable: 2
 
 # Pod anti-affinity configuration
 # By default, uses soft anti-affinity with matchLabels for instance and name
