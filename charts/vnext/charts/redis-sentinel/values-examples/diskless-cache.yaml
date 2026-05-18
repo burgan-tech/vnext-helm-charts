@@ -40,7 +40,7 @@ redis:
   password: ""
   
   # Redis port
-  port: 6679
+  port: 6379
   
   # Persistence configuration
   persistence:
@@ -251,7 +251,7 @@ tls:
   # TLS settings for Redis
   redis:
     # Port for TLS connections (if 0, uses redis.port)
-    port: 6679
+    port: 6379
     
     # Enable TLS for replication (must be true when TLS is enabled)
     replicationEnabled: true
@@ -265,7 +265,7 @@ tls:
   # TLS settings for Sentinel
   sentinel:
     # Port for TLS connections (if 0, uses sentinel.port)
-    port: 26679
+    port: 26379
     
     # Require client certificates
     authClients: false
@@ -281,7 +281,7 @@ sentinel:
   password: ""
   
   # Sentinel port
-  port: 26679
+  port: 26379
   
   # Quorum: number of Sentinels that need to agree about master being down
   # Typically (replicaCount / 2) + 1
@@ -305,10 +305,10 @@ sentinel:
 service:
   type: ClusterIP  # Keep as ClusterIP, external access uses separate LoadBalancer services
   redis:
-    port: 6679
+    port: 6379
     nodePort: ""
   sentinel:
-    port: 26679
+    port: 26379
     nodePort: ""
   annotations: {}
 
@@ -323,10 +323,10 @@ externalAccess:
     type: LoadBalancer
     
     # Port for Redis service
-    redisPort: 6679
+    redisPort: 6379
     
     # Port for Sentinel service
-    sentinelPort: 26679
+    sentinelPort: 26379
     
     # IMPORTANT: Configure one IP per pod (must match replicaCount = 3)
     # Replace with your actual LoadBalancer IPs from MetalLB or cloud provider

@@ -55,7 +55,7 @@ data:
     {{- end }}
     
     # Memory Management
-    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory {{ include "redis-sentinel.effectiveMaxMemory" . }}
     maxmemory-policy {{ .Values.redis.maxMemoryPolicy }}
     
     # Network
@@ -80,7 +80,11 @@ data:
     {{- else }}
     port {{ .Values.sentinel.port }}
     {{- end }}
+    {{- if .Values.redis.persistence.enabled }}
+    dir /data
+    {{- else }}
     dir /tmp
+    {{- end }}
     
     {{- if .Values.tls.enabled }}
     # TLS/SSL Configuration

@@ -6,7 +6,11 @@ metadata:
   labels:
     {{- include "redis-sentinel.labels" . | nindent 4 }}
 spec:
+  {{- if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "redis-sentinel.selectorLabels" . | nindent 6 }}

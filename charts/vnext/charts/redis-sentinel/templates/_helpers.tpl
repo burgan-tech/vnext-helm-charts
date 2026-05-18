@@ -85,3 +85,27 @@ Return headless service name
 {{- printf "%s-headless" (include "redis-sentinel.fullname" .) -}}
 {{- end -}}
 
+{{/*
+Compute effective maxMemory for Redis:
+- If redis.maxMemory is non-empty, use it directly.
+- Else if redis.maxMemoryRatio is set, calculate as ratio * resources.redis.limits.memory.
+- Otherwise fall back to "0" (unlimited).
+Supported memory suffixes: Gi, Mi
+*/}}
+{{- define "redis-sentinel.effectiveMaxMemory" -}}
+{{- if .Values.redis.maxMemory -}}
+{{- .Values.redis.maxMemory -}}
+{{- else if .Values.redis.maxMemoryRatio -}}
+{{- $limit := .Values.resources.redis.limits.memory -}}
+{{- $memMB := 0 -}}
+{{- if hasSuffix "Gi" $limit -}}
+{{- $memMB = mulf (trimSuffix "Gi" $limit | float64) 1024 | int -}}
+{{- else if hasSuffix "Mi" $limit -}}
+{{- $memMB = trimSuffix "Mi" $limit | int -}}
+{{- end -}}
+{{- mulf ($memMB | float64) .Values.redis.maxMemoryRatio | int }}mb
+{{- else -}}
+0
+{{- end -}}
+{{- end -}}
+
