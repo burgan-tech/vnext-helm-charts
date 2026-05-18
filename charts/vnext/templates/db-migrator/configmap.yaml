@@ -6,6 +6,10 @@ metadata:
   name: {{ include "vnext.fullname" . }}-db-migrator-config
   labels:
     {{- include "vnext.componentLabels" (dict "context" . "component" "db-migrator") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
 data:
   # Common environment variables for all .NET services
   {{- include "vnext.commonEnvVars" . | nindent 2 }}
