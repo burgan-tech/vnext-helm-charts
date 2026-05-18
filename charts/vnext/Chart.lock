@@ -1,7 +1,7 @@
 dependencies:
 - name: redis-sentinel
   repository: ""
-  version: 1.0.0
+  version: 1.1.0
 - name: dapr
   repository: https://dapr.github.io/helm-charts/
   version: 1.16.12
@@ -20,5 +20,5 @@ dependencies:
 - name: kyverno
   repository: ""
   version: 3.7.1
-digest: sha256:0773a6ce6a993c30c99023c5ed7932a301c2beb49ded7e4761c6a34fe21a392d
-generated: "2026-04-26T00:02:22.168704+03:00"
+digest: sha256:6c77e5b651bec71f2f5d3510ec840d1447c839bec0f4373382eee4793a1fabf3
+generated: "2026-05-18T13:09:20.118487+03:00"
