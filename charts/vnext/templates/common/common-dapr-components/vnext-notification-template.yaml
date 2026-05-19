@@ -1,0 +1,17 @@
+{{- range .Values.global.notificationComponents }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: vnext-notification-{{ .name }}
+spec:
+  type: {{ .spec.type }}
+  version: {{ .spec.version }}
+  metadata:
+  {{- range .spec.metadata }}
+    - name: {{ .name }}
+      value: {{ .value }}
+  {{- end }}
+scopes:
+- "vnext-{{ $.Values.global.appDomain }}-app"
+{{- end }}
