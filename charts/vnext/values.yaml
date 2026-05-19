@@ -9,6 +9,22 @@ global:
   # Example: "banking", "contract", "core"
   appDomain: "core"
 
+  notificationComponents: []
+    # - name: sms
+    #   spec: 
+    #     type: bindings.http
+    #     version: v1
+    #     metadata:
+    #       - name: url
+    #         value: http://mocklab:3001/api/notification/sms
+    # - name: state
+    #   spec: 
+    #     type: bindings.http
+    #     version: v1
+    #     metadata:
+    #       - name: url
+    #         value: http://mocklab:3001/api/notification/state
+
   # External Vault configuration
   # Use this when connecting to an existing HashiCorp Vault instance
   externalVault: 
