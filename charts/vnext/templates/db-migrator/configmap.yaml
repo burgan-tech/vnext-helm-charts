@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "vnext.componentLabels" (dict "context" . "component" "db-migrator") | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "1"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
@@ -34,7 +34,7 @@ data:
   APP_DOMAIN: {{ .Values.global.appDomain | quote }}
   DAPR_APP_ID: {{ printf "vnext-%s-db-migrator-app" ( .Values.global.appDomain ) | quote }}
 
-    # Application configuration
+  # Application configuration
   {{- if $dbMigrator.appEnvConfig }}
   {{- range $key, $value := $dbMigrator.appEnvConfig }}
   {{ $key }}: {{ $value | quote }}

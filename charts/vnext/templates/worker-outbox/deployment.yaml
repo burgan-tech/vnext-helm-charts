@@ -6,12 +6,10 @@ metadata:
   name: {{ include "vnext.fullname" . }}-worker-outbox
   labels:
     {{- include "vnext.componentLabels" (dict "context" . "component" "worker-outbox") | nindent 4 }}
-  {{- if .Values.dapr.enabled }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "4"
     "helm.sh/hook-delete-policy": before-hook-creation
-  {{- end }}
 spec:
   {{- if not $workerOutbox.autoscaling.enabled }}
   replicas: {{ $workerOutbox.replicaCount }}
