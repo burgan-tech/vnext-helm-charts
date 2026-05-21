@@ -28,6 +28,13 @@ spec:
             - /bin/sh
             - -c
             - |
+              echo "Waiting for orchestrator-initializer..."
+              while ! curl -s -o /dev/null -w "%{http_code}" "$VNEXT_INIT_URL/health" | grep -q "^200$"; do
+                echo "Orchestrator-initializer not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Orchestrator-initializer is ready"
+
               curl -sX POST "$VNEXT_INIT_URL/api/package/runtime/publish" \
               -H "Content-Type: application/json" \
               -d "{\"version\": \"${VNEXT_COMPONENT_VERSION}\", \"appDomain\": \"${APP_DOMAIN}\"}" \
