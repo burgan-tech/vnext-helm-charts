@@ -5,12 +5,10 @@ metadata:
   name: {{ include "vnext.fullname" . }}-orchestrator
   labels:
     {{- include "vnext.componentLabels" (dict "context" . "component" "orchestrator") | nindent 4 }}
-  {{- if .Values.dapr.enabled }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "4"
     "helm.sh/hook-delete-policy": before-hook-creation
-  {{- end }}
 spec:
   {{- if not .Values.orchestrator.autoscaling.enabled }}
   replicas: {{ .Values.orchestrator.replicaCount }}
