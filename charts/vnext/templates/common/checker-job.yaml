@@ -10,7 +10,7 @@ metadata:
     meta.helm.sh/release-namespace: {{ .Release.Namespace }}
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "2"
-    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-delete-policy": before-hook-creation,post-delete
 spec:
   template:
     spec:
