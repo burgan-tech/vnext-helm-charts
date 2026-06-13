@@ -27,10 +27,6 @@ data:
   # Redis configuration
   Redis__Standalone__EndPoints__0: {{ include "vnext.redisEndpoint" . | quote }}
 
-  vNextApi__BaseUrl: {{ printf "http://vnext-%s-orchestrator:5000" ( .Values.global.appDomain ) | quote }}
-
-  ExecutionApi__AppId: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
-
   APP_DOMAIN: {{ .Values.global.appDomain | quote }}
   DAPR_APP_ID: {{ printf "vnext-%s-worker-outbox-app" ( .Values.global.appDomain ) | quote }}
   
