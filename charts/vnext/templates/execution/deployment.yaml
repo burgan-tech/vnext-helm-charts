@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain "httpMaxRequestSize" (coalesce .Values.execution.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
         {{- with .Values.execution.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

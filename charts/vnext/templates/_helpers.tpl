@@ -150,6 +150,9 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | qu
 dapr.io/app-port: {{ .dapr.appPort | quote }}
 dapr.io/app-protocol: {{ .dapr.protocol | default "http" | quote }}
 {{- end }}
+{{- if .httpMaxRequestSize }}
+dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 
