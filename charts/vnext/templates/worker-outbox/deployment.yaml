@@ -20,7 +20,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" $workerOutbox.dapr "enabled" .Values.global.dapr.enabled "component" "worker-outbox" "appDomain" .Values.global.appDomain) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" $workerOutbox.dapr "enabled" .Values.global.dapr.enabled "component" "worker-outbox" "appDomain" .Values.global.appDomain "httpMaxRequestSize" (coalesce $workerOutbox.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
         {{- with $workerOutbox.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

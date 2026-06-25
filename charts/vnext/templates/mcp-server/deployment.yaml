@@ -1,0 +1,109 @@
+{{- if .Values.mcpServer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-mcp-server
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "mcp-server") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # Runs after the orchestrator / initializer (weight "4") since it depends on the Orchestration API.
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  {{- if not .Values.mcpServer.autoscaling.enabled }}
+  replicas: {{ .Values.mcpServer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "mcp-server") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.mcpServer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        "checksum/config": {{ include (print $.Template.BasePath "/mcp-server/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "mcp-server") | nindent 8 }}
+        {{- with .Values.mcpServer.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (coalesce .Values.mcpServer.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      {{- with .Values.mcpServer.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The MCP server depends on the Orchestration API — block startup until it is healthy.
+      initContainers:
+        - name: orchestrator-checker
+          image: "alpine/curl:latest"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          env:
+            - name: VNEXT_APP_URL
+              value: "http://{{ include "vnext.fullname" . }}-orchestrator:{{ .Values.orchestrator.service.port }}"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Checking services..."
+              while ! (curl -s $VNEXT_APP_URL/health | grep -qi '"status":"Healthy"'); do echo "Orchestrator DOWN" && sleep 10 ; done && echo "Orchestrator UP"
+      containers:
+        - name: {{ .Chart.Name }}-mcp-server
+          image: {{ include "vnext.image" (dict "image" .Values.mcpServer.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ include "vnext.imagePullPolicy" (dict "component" .Values.mcpServer "global" .Values.global) }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "vnext.fullname" . }}-mcp-server-config
+          {{- $securityContext := include "vnext.securityContext" (dict "component" .Values.mcpServer "global" .Values.global) }}
+          {{- if $securityContext }}
+          securityContext:
+            {{- $securityContext | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcpServer.service.port }}
+              protocol: TCP
+          # The MCP server exposes only the MCP protocol at "/" (no HTTP health endpoint),
+          # so probes use a TCP socket check rather than an HTTP GET.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- $resources := include "vnext.resources" (dict "component" .Values.mcpServer "global" .Values.global) }}
+          {{- if $resources }}
+          resources:
+            {{- $resources | nindent 12 }}
+          {{- end }}
+          {{- with .Values.mcpServer.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.mcpServer.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpServer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpServer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpServer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

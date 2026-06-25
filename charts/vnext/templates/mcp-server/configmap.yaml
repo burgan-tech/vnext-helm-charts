@@ -1,0 +1,31 @@
+{{- if .Values.mcpServer.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-mcp-server-config
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "mcp-server") | nindent 4 }}
+data:
+  # The MCP server has NO Dapr / DB / Redis references, so the common env-var,
+  # telemetry and Redis/DB blocks used by other services are intentionally omitted.
+  ASPNETCORE_URLS: "http://+:5000"
+
+  # Global .NET environment variables
+  {{- include "vnext.dotnetEnvVars" .Values.global.dotnetEnv | nindent 2 }}
+
+  # Orchestration API the server proxies to (in-cluster orchestrator service)
+  Mcp__OrchestrationBaseUrl: {{ printf "http://vnext-%s-orchestrator:5000" .Values.global.appDomain | quote }}
+  # The single vNext domain this MCP instance serves
+  Mcp__Domain: {{ .Values.global.appDomain | quote }}
+
+  Mcp__AllowMutations: {{ .Values.mcpServer.config.allowMutations | quote }}
+  Mcp__AllowCodeRead: {{ .Values.mcpServer.config.allowCodeRead | quote }}
+  Mcp__MetaPackageName: {{ .Values.mcpServer.config.metaPackageName | quote }}
+  Mcp__MetaPackageVersion: {{ .Values.mcpServer.config.metaPackageVersion | quote }}
+  {{- /* Mcp__ApiKey intentionally omitted — the app manages its own key via appsettings */}}
+
+  # Additional custom environment variables
+  {{- range $key, $value := .Values.mcpServer.extraEnvConfig }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
