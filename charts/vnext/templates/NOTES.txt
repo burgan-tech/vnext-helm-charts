@@ -26,6 +26,9 @@
 {{- if .Values.orchestrator.initializer.enabled }}
    [x] Initializer        (init job)
 {{- end }}
+{{- if .Values.mcpServer.enabled }}
+   [x] MCP Server         {{ .Values.mcpServer.replicaCount }} replica(s)
+{{- end }}
 
  Infrastructure:
 {{- if .Values.dapr.enabled }}
@@ -128,6 +131,21 @@
    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-worker-outbox 5003:5000
    http://localhost:5003
    Health: /health
+{{- end }}
+{{- if .Values.mcpServer.enabled }}
+
+ MCP Server (vnext-runtime):
+{{- if .Values.mcpServer.ingress.enabled }}
+{{- range $host := .Values.mcpServer.ingress.hosts }}
+{{- range .paths }}
+   URL: http{{ if $.Values.mcpServer.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else }}
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vnext.fullname" . }}-mcp-server 5004:5000
+   http://localhost:5004
+{{- end }}
+   MCP endpoint (Streamable HTTP) at "/" — register with: claude mcp add --transport http vnext-runtime <url>
 {{- end }}
 {{- if .Values.vault.enabled }}
 
