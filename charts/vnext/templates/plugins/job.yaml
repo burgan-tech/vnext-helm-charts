@@ -1,0 +1,80 @@
+{{- /*
+Single populator Job that fetches all configured plugin repos into the shared
+RWX PVC. Runs as a post-install/post-upgrade hook with a low weight so it
+completes BEFORE the consuming workloads (e.g. orchestrator, weight 4) start.
+
+Being the ONLY writer, it needs no cross-pod lock: idempotency is a per-repo
+`<hash>.done` marker created LAST, after a successful clone+copy. If the Job
+dies mid-fetch no marker is written, so the next attempt re-fetches; a genuine
+clone failure (set -e) fails the Job and surfaces as a failed Helm release
+instead of silently starting pods with missing plugins.
+*/ -}}
+{{- if eq (include "vnext.plugins.enabled" .) "true" }}
+{{- $p := .Values.orchestrator.plugins }}
+{{- $mountPath := $p.mountPath | default "/app/assemblies" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vnext.fullname" . }}-plugin-fetcher
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "plugin-fetcher") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "plugin-fetcher") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with (coalesce .Values.orchestrator.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: plugin-fetcher
+          image: "{{ $p.image.repository | default "alpine/git" }}:{{ $p.image.tag | default "latest" }}"
+          imagePullPolicy: {{ $p.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              PLUGIN_DIR="{{ $mountPath }}"
+              META="$PLUGIN_DIR/.plugin-meta"
+              mkdir -p "$META"
+              {{- range $i, $repo := $p.repos }}
+              URL="{{ $repo.url }}"
+              echo "Plugin: $URL{{ with $repo.ref }} @ {{ . }}{{ end }}"
+              MARKER="$META/{{ sha256sum (printf "%s@%s" $repo.url ($repo.ref | default "HEAD")) | trunc 16 }}.done"
+              TOKEN="${PLUGIN_TOKEN_{{ $i }}:-}"
+              {{- if $p.forceRefresh }}
+              rm -f "$MARKER"
+              {{- end }}
+              if [ -f "$MARKER" ]; then
+                echo "  already present, skipping (set forceRefresh to re-fetch)"
+              else
+                if [ -n "$TOKEN" ]; then URL=$(printf '%s' "$URL" | sed -E "s#^(https?://)#\1${TOKEN}@#"); fi
+                rm -rf /tmp/plugin-src
+                git clone --depth 1 {{ with $repo.ref }}--branch "{{ . }}" {{ end }}"$URL" /tmp/plugin-src
+                rm -rf /tmp/plugin-src/.git
+                cp -a "/tmp/plugin-src{{ with $repo.subPath }}/{{ . }}{{ end }}/." "$PLUGIN_DIR/"
+                rm -rf /tmp/plugin-src
+                touch "$MARKER"
+                echo "  done."
+              fi
+              {{- end }}
+              echo "All plugins ready under $PLUGIN_DIR"
+          env:
+            {{- include "vnext.plugins.tokenEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: plugins
+              mountPath: {{ $mountPath }}
+      volumes:
+        - name: plugins
+          persistentVolumeClaim:
+            claimName: {{ include "vnext.plugins.claimName" . }}
+{{- end }}

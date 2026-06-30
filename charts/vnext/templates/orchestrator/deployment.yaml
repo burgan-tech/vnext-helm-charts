@@ -68,13 +68,21 @@ spec:
           resources:
             {{- $resources | nindent 12 }}
           {{- end }}
-          {{- with .Values.orchestrator.volumeMounts }}
+          {{- $pluginMount := include "vnext.plugins.volumeMount" . }}
+          {{- if or .Values.orchestrator.volumeMounts $pluginMount }}
           volumeMounts:
+            {{- with .Values.orchestrator.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- $pluginMount | nindent 12 }}
           {{- end }}
-      {{- with .Values.orchestrator.volumes }}
+      {{- $pluginVol := include "vnext.plugins.volume" . }}
+      {{- if or .Values.orchestrator.volumes $pluginVol }}
       volumes:
+        {{- with .Values.orchestrator.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- $pluginVol | nindent 8 }}
       {{- end }}
       {{- with .Values.orchestrator.nodeSelector }}
       nodeSelector:

@@ -346,6 +346,19 @@ Validate required values
   {{- end -}}
 {{- end -}}
 
+{{/* Validate plugins configuration */}}
+{{- if and .Values.orchestrator.plugins .Values.orchestrator.plugins.enabled -}}
+  {{- range $i, $repo := .Values.orchestrator.plugins.repos -}}
+    {{- if not $repo.url -}}
+      {{- $messages = append $messages (printf "orchestrator.plugins.repos[%d].url is required" $i) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $persistence := .Values.orchestrator.plugins.persistence | default dict -}}
+  {{- if and (not $persistence.existingClaim) (ne ($persistence.accessMode | default "ReadWriteMany") "ReadWriteMany") -}}
+    {{- $messages = append $messages "orchestrator.plugins.persistence.accessMode should be ReadWriteMany so multiple pods can share the plugins" -}}
+  {{- end -}}
+{{- end -}}
+
 {{/* Output validation errors if any */}}
 {{- if $messages -}}
 {{- printf "\nVALUES VALIDATION ERRORS:\n" -}}
@@ -422,4 +435,96 @@ Usage: {{ include "vnext.componentEnabled" (dict "component" .Values.orchestrato
 {{- else -}}
 true
 {{- end -}}
+{{- end -}}
+
+{{/*
+==============================================================================
+PLUGINS
+Helpers for fetching plugin git repositories (configured under
+.Values.orchestrator.plugins) into a ReadWriteMany PVC via a single populator
+Job (see templates/plugins/job.yaml). Consumers mount the PVC read-only.
+Each repo's contents are copied to the ROOT of mountPath. Fetching is
+idempotent via a per-repo `<hash>.done` marker; because the Job is the only
+writer, no cross-pod lock is needed.
+==============================================================================
+*/}}
+
+{{/*
+Whether plugin fetching is active (enabled and at least one repo defined).
+Usage: {{ if eq (include "vnext.plugins.enabled" .) "true" }}
+*/}}
+{{- define "vnext.plugins.enabled" -}}
+{{- $p := .Values.orchestrator.plugins | default dict -}}
+{{- if and $p.enabled $p.repos -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the generated Secret that holds inline (dev) plugin tokens.
+*/}}
+{{- define "vnext.plugins.secretName" -}}
+{{- printf "%s-plugin-tokens" (include "vnext.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Name of the PVC backing the plugins (existingClaim override or generated).
+*/}}
+{{- define "vnext.plugins.claimName" -}}
+{{- $persistence := .Values.orchestrator.plugins.persistence | default dict -}}
+{{- if $persistence.existingClaim -}}
+{{- $persistence.existingClaim -}}
+{{- else -}}
+{{- printf "%s-plugins" (include "vnext.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The shared PVC volume that holds the cloned plugins.
+Usage: {{ include "vnext.plugins.volume" . | nindent 8 }}
+*/}}
+{{- define "vnext.plugins.volume" -}}
+{{- if eq (include "vnext.plugins.enabled" .) "true" -}}
+- name: plugins
+  persistentVolumeClaim:
+    claimName: {{ include "vnext.plugins.claimName" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The read-only mount of the plugins volume into a consuming container.
+Usage: {{ include "vnext.plugins.volumeMount" . | nindent 12 }}
+*/}}
+{{- define "vnext.plugins.volumeMount" -}}
+{{- if eq (include "vnext.plugins.enabled" .) "true" -}}
+{{- $p := .Values.orchestrator.plugins -}}
+- name: plugins
+  mountPath: {{ $p.mountPath | default "/app/assemblies" }}
+  readOnly: true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Token env vars for the plugin-fetcher Job. Each repo's token comes from the
+resolved secret (per-repo existingSecret -> defaultAuth -> generated inline
+secret) and never appears in the rendered manifest as plaintext.
+Usage: {{ include "vnext.plugins.tokenEnv" . | nindent 12 }}
+*/}}
+{{- define "vnext.plugins.tokenEnv" -}}
+{{- $p := .Values.orchestrator.plugins -}}
+{{- $genSecret := include "vnext.plugins.secretName" . -}}
+{{- range $i, $repo := $p.repos }}
+{{- $auth := $repo.auth | default $p.defaultAuth | default dict }}
+{{- if $auth.existingSecret }}
+- name: PLUGIN_TOKEN_{{ $i }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $auth.existingSecret }}
+      key: {{ $auth.tokenKey | default "token" }}
+{{- else if $auth.token }}
+- name: PLUGIN_TOKEN_{{ $i }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $genSecret }}
+      key: {{ printf "plugin-%d-token" $i }}
+{{- end }}
+{{- end }}
 {{- end -}}

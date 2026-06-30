@@ -1,0 +1,26 @@
+{{- /*
+ReadWriteMany PVC that holds the cloned plugins. Created only when plugins are
+enabled, persistence is enabled, and no existingClaim is supplied. As a normal
+(non-hook) resource it is created before the post-install orchestrator hook, so
+the claim exists by the time the init container mounts it.
+*/ -}}
+{{- if eq (include "vnext.plugins.enabled" .) "true" }}
+{{- $persistence := .Values.orchestrator.plugins.persistence | default dict }}
+{{- if and $persistence.enabled (not $persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vnext.plugins.claimName" . }}
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ $persistence.accessMode | default "ReadWriteMany" }}
+  resources:
+    requests:
+      storage: {{ $persistence.size | default "1Gi" }}
+  {{- if $persistence.storageClass }}
+  storageClassName: {{ $persistence.storageClass }}
+  {{- end }}
+{{- end }}
+{{- end }}
