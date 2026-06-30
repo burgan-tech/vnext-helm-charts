@@ -223,6 +223,7 @@ global:
     # Run container as non-root user (may need adjustment for some images)
     runAsNonRoot: false
 
+
 # ==============================================================================
 # SERVICE ACCOUNT CONFIGURATION
 # Kubernetes service account for pod authentication
@@ -401,6 +402,72 @@ orchestrator:
     Logging__LogLevel__Default: "Debug"
     # SignalR hub configuration for real-time communication
     SignalR__AppId: "http://localhost:6203"
+
+  # ---------------------------------------------------------------------------
+  # Plugins
+  # A single populator Job (post-install/post-upgrade hook) clones these repos
+  # into a ReadWriteMany PVC before the orchestrator starts; the orchestrator
+  # mounts the PVC read-only. Each repo's contents are copied to the ROOT of
+  # `mountPath` (no per-repo sub-directory). Fetching is idempotent: a repo
+  # already present in the PVC is not re-cloned unless `forceRefresh` is set.
+  # ---------------------------------------------------------------------------
+  plugins:
+    # Enable or disable plugin fetching entirely
+    enabled: false
+
+    # Where the plugins PVC is mounted inside the container(s)
+    mountPath: /app/assemblies
+
+    # Re-clone every repo on each rollout even if already present in the PVC
+    forceRefresh: false
+
+    # Image used by the init container to clone the repositories
+    image:
+      repository: alpine/git
+      tag: latest
+      # If empty, falls back to global.imagePullPolicy
+      pullPolicy: ""
+
+    # Shared storage that holds the cloned plugins.
+    # MUST be ReadWriteMany so multiple replicas/services can mount it at once.
+    persistence:
+      # Create a PVC (set false + existingClaim to reuse one)
+      enabled: true
+      # Reuse an existing RWX PVC instead of creating one
+      existingClaim: ""
+      # StorageClass that supports ReadWriteMany (e.g. nfs, azurefile, efs-sc).
+      # Empty uses the cluster default — which often does NOT support RWX.
+      storageClass: ""
+      accessMode: ReadWriteMany
+      size: 1Gi
+
+    # Default authentication applied to every repo that does not define its own
+    # `auth` block. In production prefer `existingSecret`; `token` is for local
+    # development only and must never hold a real credential in committed values.
+    defaultAuth:
+      # Name of an existing Kubernetes Secret holding the git token/PAT
+      existingSecret: ""
+      # Key inside that secret
+      tokenKey: token
+      # Inline token (dev only). Synthesized into a generated Secret at install
+      # time. Leave empty in committed values.
+      token: ""
+
+    # Repositories to fetch. Only `url` is required. Contents land at the root
+    # of `mountPath`, so ensure repos do not produce conflicting file paths.
+    repos: []
+      # - url: https://tfs.burgan.com.tr/tfs/DefaultCollection/PROJECT/_git/vnext
+      #   # Branch or tag to check out (optional; defaults to repo HEAD)
+      #   ref: master
+      #   # Sub-directory inside the repo to copy (optional; empty = repo root)
+      #   subPath: plugins
+      #   # Per-repo auth override. Omit to inherit defaultAuth.
+      #   auth:
+      #     existingSecret: vnext-plugin-tokens
+      #     tokenKey: vnext-core-token
+      # - url: https://tfs.burgan.com.tr/tfs/DefaultCollection/MustafaTest/_git/vnext-plugins
+      #   ref: main
+      #   # No auth block -> inherits defaultAuth (public repo if defaultAuth empty)
 
 # ==============================================================================
 # EXECUTION SERVICE CONFIGURATION
