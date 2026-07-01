@@ -440,12 +440,13 @@ true
 {{/*
 ==============================================================================
 PLUGINS
-Helpers for fetching plugin git repositories (configured under
-.Values.orchestrator.plugins) into a ReadWriteMany PVC via a single populator
-Job (see templates/plugins/job.yaml). Consumers mount the PVC read-only.
-Each repo's contents are copied to the ROOT of mountPath. Fetching is
-idempotent via a per-repo `<hash>.done` marker; because the Job is the only
-writer, no cross-pod lock is needed.
+Helpers for the plugins feature (configured under .Values.orchestrator.plugins).
+A single populator Job (see templates/plugins/job.yaml) reconciles a
+ReadWriteMany PVC to match the `pluginNames` allowlist of DLL file names;
+consumers mount the PVC read-only. Missing DLLs are copied flat into mountPath
+(last repo wins on duplicate names); DLLs already present are left untouched
+unless forceRefresh is set; files dropped from the list are removed. Because
+the Job is the only writer, no lock is needed.
 ==============================================================================
 */}}
 

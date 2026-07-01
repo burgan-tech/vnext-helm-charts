@@ -1,13 +1,21 @@
 {{- /*
-Single populator Job that fetches all configured plugin repos into the shared
-RWX PVC. Runs as a post-install/post-upgrade hook with a low weight so it
-completes BEFORE the consuming workloads (e.g. orchestrator, weight 4) start.
+Single populator Job that reconciles the shared RWX PVC to match the
+`pluginNames` allowlist of DLL file names. Runs as a post-install/post-upgrade
+hook with a low weight so it completes BEFORE the consuming workloads
+(orchestrator, weight 4).
 
-Being the ONLY writer, it needs no cross-pod lock: idempotency is a per-repo
-`<hash>.done` marker created LAST, after a successful clone+copy. If the Job
-dies mid-fetch no marker is written, so the next attempt re-fetches; a genuine
-clone failure (set -e) fails the Job and surfaces as a failed Helm release
-instead of silently starting pods with missing plugins.
+Being the ONLY writer, it needs no cross-pod lock. Each run:
+  1. INSTALLS the listed DLLs that are MISSING from the PVC (a DLL already
+     present is left untouched unless forceRefresh is set, so nothing is
+     re-downloaded and no repo is cloned when nothing is missing). A missing
+     DLL is found by a recursive search under each repo's <subPath> and copied
+     FLAT into <mountPath>/<name>; repos are processed in list order so the
+     LAST repo that contains a given name wins.
+  2. PRUNES: deletes any file in the PVC that is not in `pluginNames`.
+  3. VERIFIES: a listed name not found in any repo fails the Job (set -e),
+     surfacing as a failed Helm release instead of silently missing a plugin.
+Copies are atomic (temp file + rename), so each DLL is either fully present or
+absent — no partial-copy state.
 */ -}}
 {{- if eq (include "vnext.plugins.enabled" .) "true" }}
 {{- $p := .Values.orchestrator.plugins }}
@@ -44,30 +52,73 @@ spec:
             - |
               set -eu
               PLUGIN_DIR="{{ $mountPath }}"
-              META="$PLUGIN_DIR/.plugin-meta"
-              mkdir -p "$META"
-              {{- range $i, $repo := $p.repos }}
-              URL="{{ $repo.url }}"
-              echo "Plugin: $URL{{ with $repo.ref }} @ {{ . }}{{ end }}"
-              MARKER="$META/{{ sha256sum (printf "%s@%s" $repo.url ($repo.ref | default "HEAD")) | trunc 16 }}.done"
-              TOKEN="${PLUGIN_TOKEN_{{ $i }}:-}"
-              {{- if $p.forceRefresh }}
-              rm -f "$MARKER"
-              {{- end }}
-              if [ -f "$MARKER" ]; then
-                echo "  already present, skipping (set forceRefresh to re-fetch)"
+              mkdir -p "$PLUGIN_DIR"
+              DESIRED="{{ $p.pluginNames | default list | join " " }}"
+              echo "Desired plugins: ${DESIRED:-<none>}"
+
+              is_desired() {
+                for d in $DESIRED; do [ "$d" = "$1" ] && return 0; done
+                return 1
+              }
+
+              # 1. Work out which DLLs still need fetching. A DLL already in the
+              #    PVC is skipped (not re-downloaded) unless forceRefresh is set.
+              NEED=""
+              for name in $DESIRED; do
+                {{- if $p.forceRefresh }}
+                NEED="$NEED $name"
+                {{- else }}
+                [ -e "$PLUGIN_DIR/$name" ] || NEED="$NEED $name"
+                {{- end }}
+              done
+
+              if [ -z "$NEED" ]; then
+                echo "All desired plugins already present; skipping download."
               else
+                echo "Plugins to fetch:$NEED"
+                # Clone every repo in order; later repos overwrite earlier ones
+                # (last listed repo wins on duplicate names).
+                {{- range $i, $repo := $p.repos }}
+                URL="{{ $repo.url }}"
+                TOKEN="${PLUGIN_TOKEN_{{ $i }}:-}"
+                echo "Searching repo: $URL{{ with $repo.ref }} @ {{ . }}{{ end }}"
                 if [ -n "$TOKEN" ]; then URL=$(printf '%s' "$URL" | sed -E "s#^(https?://)#\1${TOKEN}@#"); fi
                 rm -rf /tmp/plugin-src
                 git clone --depth 1 {{ with $repo.ref }}--branch "{{ . }}" {{ end }}"$URL" /tmp/plugin-src
-                rm -rf /tmp/plugin-src/.git
-                cp -a "/tmp/plugin-src{{ with $repo.subPath }}/{{ . }}{{ end }}/." "$PLUGIN_DIR/"
+                SRC="/tmp/plugin-src{{ with $repo.subPath }}/{{ . }}{{ end }}"
+                for name in $NEED; do
+                  found=$(find "$SRC" -type f -name "$name" 2>/dev/null | head -n 1 || true)
+                  if [ -n "$found" ]; then
+                    echo "  installing: $name"
+                    cp -f "$found" "$PLUGIN_DIR/.$name.tmp"
+                    mv -f "$PLUGIN_DIR/.$name.tmp" "$PLUGIN_DIR/$name"
+                  fi
+                done
                 rm -rf /tmp/plugin-src
-                touch "$MARKER"
-                echo "  done."
+                {{- end }}
               fi
-              {{- end }}
-              echo "All plugins ready under $PLUGIN_DIR"
+
+              # 2. Prune: remove any file not in the allowlist
+              for path in "$PLUGIN_DIR"/* "$PLUGIN_DIR"/.*; do
+                [ -e "$path" ] || continue
+                bn=$(basename "$path")
+                case "$bn" in .|..) continue ;; esac
+                if ! is_desired "$bn"; then
+                  echo "Pruning removed plugin: $bn"
+                  rm -rf "$path"
+                fi
+              done
+
+              # 3. Verify every desired plugin was installed
+              MISSING=""
+              for name in $DESIRED; do
+                [ -e "$PLUGIN_DIR/$name" ] || MISSING="$MISSING $name"
+              done
+              if [ -n "$MISSING" ]; then
+                echo "ERROR: plugins not found in any repo:$MISSING" >&2
+                exit 1
+              fi
+              echo "Plugins reconciled under $PLUGIN_DIR to: ${DESIRED:-<none>}"
           env:
             {{- include "vnext.plugins.tokenEnv" . | nindent 12 }}
           volumeMounts:
