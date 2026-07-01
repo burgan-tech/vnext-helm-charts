@@ -405,23 +405,41 @@ orchestrator:
 
   # ---------------------------------------------------------------------------
   # Plugins
-  # A single populator Job (post-install/post-upgrade hook) clones these repos
-  # into a ReadWriteMany PVC before the orchestrator starts; the orchestrator
-  # mounts the PVC read-only. Each repo's contents are copied to the ROOT of
-  # `mountPath` (no per-repo sub-directory). Fetching is idempotent: a repo
-  # already present in the PVC is not re-cloned unless `forceRefresh` is set.
+  # A single populator Job (post-install/post-upgrade hook) reconciles a
+  # ReadWriteMany PVC before the orchestrator starts; the orchestrator mounts
+  # the PVC read-only.
+  #
+  # A "plugin" is a DLL file. `pluginNames` is an allowlist of DLL file names.
+  # Each run the Job installs the listed DLLs that are MISSING from the PVC (a
+  # DLL already present is left untouched, so nothing is re-downloaded), then
+  # PRUNES any file in the PVC that is not listed. To fetch a missing DLL it
+  # clones the repos in list order and copies the match FLAT into `mountPath`;
+  # if the same name exists in more than one repo, the LAST repo wins. A listed
+  # name not found in any repo fails the Job. Set `forceRefresh: true` to
+  # re-download every listed DLL even if already present.
   # ---------------------------------------------------------------------------
   plugins:
     # Enable or disable plugin fetching entirely
     enabled: false
 
-    # Where the plugins PVC is mounted inside the container(s)
+    # Where the plugin DLLs are placed inside the container(s)
     mountPath: /app/assemblies
 
-    # Re-clone every repo on each rollout even if already present in the PVC
+    # Allowlist of plugin DLL file names to install (exact file names, including
+    # the .dll extension). The Job searches each repo's `subPath` recursively
+    # for these files. Files in the PVC that are NOT listed here are removed on
+    # the next run. Empty list = no plugins installed (existing ones are pruned).
+    pluginNames: []
+      # - Vnext.PluginA.dll
+      # - Vnext.PluginC.dll
+
+    # By default a DLL already present in the PVC is left untouched (not
+    # re-downloaded), so repos are only cloned when something is missing.
+    # Set true to re-download every listed DLL even if already present — this
+    # also re-applies the "last repo wins" rule for duplicate names.
     forceRefresh: false
 
-    # Image used by the init container to clone the repositories
+    # Image used by the Job to clone the repositories
     image:
       repository: alpine/git
       tag: latest
@@ -453,19 +471,22 @@ orchestrator:
       # time. Leave empty in committed values.
       token: ""
 
-    # Repositories to fetch. Only `url` is required. Contents land at the root
-    # of `mountPath`, so ensure repos do not produce conflicting file paths.
+    # Source repositories that contain the plugin DLLs. Only `url` is required.
+    # Each repo is searched (under its `subPath`) for the file names in
+    # `pluginNames`. Repos are processed in order, so if the same file name
+    # exists in multiple repos, the LAST one listed here wins.
     repos: []
-      # - url: https://tfs.burgan.com.tr/tfs/DefaultCollection/PROJECT/_git/vnext
+      # - url: https://github.com.tr/_git/vnext
       #   # Branch or tag to check out (optional; defaults to repo HEAD)
       #   ref: master
-      #   # Sub-directory inside the repo to copy (optional; empty = repo root)
+      #   # Directory inside the repo to search for the DLLs, recursively
+      #   # (optional; empty = repo root)
       #   subPath: plugins
       #   # Per-repo auth override. Omit to inherit defaultAuth.
       #   auth:
       #     existingSecret: vnext-plugin-tokens
       #     tokenKey: vnext-core-token
-      # - url: https://tfs.burgan.com.tr/tfs/DefaultCollection/MustafaTest/_git/vnext-plugins
+      # - url: https://github.com.tr/_git/vnext
       #   ref: main
       #   # No auth block -> inherits defaultAuth (public repo if defaultAuth empty)
 
