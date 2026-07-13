@@ -67,6 +67,21 @@ on:
           - patch
           - minor
           - major
+      prerelease_type:
+        description: "Chart prerelease kanalı (none = stable). alpha/beta/rc → X.Y.Z-alpha.N"
+        required: false
+        default: "none"
+        type: choice
+        options:
+          - none
+          - alpha
+          - beta
+          - rc
+      prerelease_number:
+        description: "Prerelease numarası (ör. 1 → 1.2.4-alpha.1). Her yeni alpha'da artır."
+        required: false
+        default: "1"
+        type: string
 
 concurrency:
   group: helm-chart-${{ github.event_name }}-${{ github.ref }}
@@ -205,24 +220,25 @@ jobs:
 
           BUMP_TYPE="${{ steps.bump.outputs.type }}"
           case "$BUMP_TYPE" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
           esac
+          BASE_VERSION="$MAJOR.$MINOR.$PATCH"
 
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          # Prerelease yalnızca workflow_dispatch + prerelease_type != none iken uygulanır.
+          PRERELEASE_TYPE="${{ github.event.inputs.prerelease_type }}"
+          IS_PRERELEASE="false"
+          NEW_VERSION="$BASE_VERSION"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$PRERELEASE_TYPE" && "$PRERELEASE_TYPE" != "none" ]]; then
+            NEW_VERSION="${BASE_VERSION}-${PRERELEASE_TYPE}.${{ github.event.inputs.prerelease_number }}"
+            IS_PRERELEASE="true"
+          fi
+
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "previous=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "Chart version: $CURRENT → $NEW_VERSION ($BUMP_TYPE)"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Chart version: $CURRENT → $NEW_VERSION (bump=$BUMP_TYPE, prerelease=$IS_PRERELEASE)"
 
       - name: Update Chart.yaml
         run: |
@@ -236,6 +252,7 @@ jobs:
           head -6 ${{ env.CHART_PATH }}/Chart.yaml
 
       - name: Commit version bump
+        if: steps.chart_version.outputs.is_prerelease != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -340,6 +357,7 @@ jobs:
             .helm-packages/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.version }}.tgz
             .helm-packages/metadata.json
           generate_release_notes: true
-          make_latest: true
+          make_latest: ${{ steps.chart_version.outputs.is_prerelease != 'true' }}
+          prerelease: ${{ steps.chart_version.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
