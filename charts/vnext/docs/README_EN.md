@@ -201,6 +201,53 @@ global:
     grpcPort: "42111"
 ```
 
+#### Dapr Resiliency
+
+The chart ships two Dapr `Resiliency` policies out of the box (rendered automatically, no configuration required). Each installs a circuit breaker that fast-fails cross-service invocations instead of stacking timeouts, and is scoped to a single sidecar:
+
+| Resiliency | Scoped to (sidecar) | Protects call | App ID pattern |
+|------------|---------------------|---------------|----------------|
+| `vnext-orchestration-resiliency` | Orchestrator | Orchestration → Execution task invocation | `vnext-<appDomain>-app` → `vnext-<appDomain>-execution-app` |
+| `vnext-inbox-resiliency` | Worker-Inbox | Inbox → Orchestration forwards | `vnext-<appDomain>-worker-inbox-app` → `vnext-<appDomain>-app` |
+
+Both use `invocationBreaker`: 5 consecutive failures open the circuit for 30s, then a single probe request decides whether to close it. No retry or timeout policy is applied on purpose — retry/timeout ownership stays in the application layer. App IDs are derived from `global.appDomain`.
+
+#### Event-Driven Pub/Sub and Subscriptions
+
+For event-driven workflows you can declare additional Dapr pub/sub components and topic subscriptions from values. Both are rendered as Dapr resources **scoped to the orchestrator (`vnext-<appDomain>-app`) sidecar**.
+
+```yaml
+global:
+  # Pub/sub components — the `name` is used verbatim as the Dapr component name.
+  pubsubComponents:
+    - name: kafka-events
+      spec:
+        type: pubsub.kafka
+        version: v1
+        metadata:
+          - name: brokers
+            value: "kafka:9092"
+          - name: authType
+            value: none
+
+  # Subscriptions (Dapr Subscription v2alpha1). `pubsubname` must match a pubsubComponents[].name.
+  subscriptionComponents:
+    - name: order-created-sub
+      spec:
+        pubsubname: kafka-events
+        topic: order.created
+        routes:
+          default: /events/order-created
+          # rules:
+          #   - match: 'event.type == "priority"'
+          #     path: /events/order-created-priority
+        # deadLetterTopic: order.created.DLQ
+        # metadata:
+        #   rawPayload: "true"
+```
+
+Both lists default to `[]` (nothing rendered). This mirrors the existing `global.notificationComponents` pattern for dynamic notification bindings.
+
 #### Telemetry Configuration
 
 ```yaml

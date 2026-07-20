@@ -18,12 +18,42 @@ global:
     #       - name: url
     #         value: http://mocklab:3001/api/notification/sms
     # - name: state
-    #   spec: 
+    #   spec:
     #     type: bindings.http
     #     version: v1
     #     metadata:
     #       - name: url
     #         value: http://mocklab:3001/api/notification/state
+
+  # Dynamic pub/sub components for event-driven workflows.
+  # Each entry renders a Dapr Component scoped to the orchestrator (vnext-<appDomain>-app) sidecar.
+  # The component name is used verbatim; reference it from subscriptionComponents[].spec.pubsubname.
+  pubsubComponents: []
+    # - name: kafka-events
+    #   spec:
+    #     type: pubsub.kafka
+    #     version: v1
+    #     metadata:
+    #       - name: brokers
+    #         value: "kafka:9092"
+    #       - name: authType
+    #         value: none
+
+  # Dynamic subscriptions for event-driven workflows.
+  # Each entry renders a Dapr Subscription (v2alpha1) scoped to the orchestrator sidecar.
+  subscriptionComponents: []
+    # - name: order-created-sub
+    #   spec:
+    #     pubsubname: kafka-events          # must match a pubsubComponents[].name
+    #     topic: order.created
+    #     routes:
+    #       default: /events/order-created
+    #       # rules:
+    #       #   - match: 'event.type == "priority"'
+    #       #     path: /events/order-created-priority
+    #     # deadLetterTopic: order.created.DLQ
+    #     # metadata:
+    #     #   rawPayload: "true"
 
   # External Vault configuration
   # Use this when connecting to an existing HashiCorp Vault instance

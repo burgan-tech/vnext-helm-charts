@@ -1,0 +1,17 @@
+{{- range .Values.global.pubsubComponents }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .name }}
+spec:
+  type: {{ .spec.type }}
+  version: {{ .spec.version }}
+  metadata:
+  {{- range .spec.metadata }}
+    - name: {{ .name }}
+      value: {{ .value }}
+  {{- end }}
+scopes:
+- "vnext-{{ $.Values.global.appDomain }}-app"
+{{- end }}
