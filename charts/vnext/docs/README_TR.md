@@ -201,6 +201,53 @@ global:
     grpcPort: "42111"
 ```
 
+#### Dapr Resiliency (Dayanıklılık)
+
+Chart, kutudan çıktığı gibi iki Dapr `Resiliency` politikasıyla gelir (otomatik oluşturulur, yapılandırma gerektirmez). Her biri, servisler arası çağrılarda zaman aşımlarının üst üste binmesi yerine devreyi hızlıca açan bir circuit breaker kurar ve tek bir sidecar'a scope'lanır:
+
+| Resiliency | Scope (sidecar) | Korunan çağrı | App ID deseni |
+|------------|-----------------|---------------|---------------|
+| `vnext-orchestration-resiliency` | Orchestrator | Orchestration → Execution task çağrısı | `vnext-<appDomain>-app` → `vnext-<appDomain>-execution-app` |
+| `vnext-inbox-resiliency` | Worker-Inbox | Inbox → Orchestration yönlendirmeleri | `vnext-<appDomain>-worker-inbox-app` → `vnext-<appDomain>-app` |
+
+İkisi de `invocationBreaker` kullanır: 5 ardışık hata devreyi 30 saniye açar, ardından tek bir prob isteği devrenin kapanıp kapanmayacağına karar verir. Bilinçli olarak retry veya timeout politikası uygulanmaz — retry/timeout sorumluluğu uygulama katmanında kalır. App ID'ler `global.appDomain` değerinden türetilir.
+
+#### Olay Tabanlı Pub/Sub ve Subscription'lar
+
+Olay tabanlı (event-driven) workflow'lar için değerler üzerinden ek Dapr pub/sub bileşenleri ve topic subscription'ları tanımlayabilirsiniz. İkisi de **orchestrator (`vnext-<appDomain>-app`) sidecar'ına scope'lanmış** Dapr kaynakları olarak oluşturulur.
+
+```yaml
+global:
+  # Pub/sub bileşenleri — `name` değeri Dapr bileşen adı olarak birebir kullanılır.
+  pubsubComponents:
+    - name: kafka-events
+      spec:
+        type: pubsub.kafka
+        version: v1
+        metadata:
+          - name: brokers
+            value: "kafka:9092"
+          - name: authType
+            value: none
+
+  # Subscription'lar (Dapr Subscription v2alpha1). `pubsubname`, pubsubComponents[].name ile eşleşmelidir.
+  subscriptionComponents:
+    - name: order-created-sub
+      spec:
+        pubsubname: kafka-events
+        topic: order.created
+        routes:
+          default: /events/order-created
+          # rules:
+          #   - match: 'event.type == "priority"'
+          #     path: /events/order-created-priority
+        # deadLetterTopic: order.created.DLQ
+        # metadata:
+        #   rawPayload: "true"
+```
+
+Her iki liste de varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz). Bu, dinamik notification binding'leri için mevcut `global.notificationComponents` desenini takip eder.
+
 #### Telemetri Yapılandırması
 
 ```yaml
