@@ -17,7 +17,7 @@ data:
   {{- include "vnext.appEnvVars" .Values.global.appEnvConfig | nindent 2 }}
   
   # Telemetry configuration
-  {{- include "vnext.telemetryEnvVars" (dict "serviceName" (printf "vnext-%s-worker-inbox" ( .Values.global.appDomain )) "global" .Values.global "context" .) | nindent 2 }}
+  {{- include "vnext.telemetryEnvVars" (dict "serviceName" (printf "vnext-%s-worker-inbox" ( .Values.global.appDomain )) "serviceVersion" ($workerInbox.image.tag | default .Chart.AppVersion) "global" .Values.global "context" .) | nindent 2 }}
   
   {{- if eq $workerInbox.appEnvConfig.Vault__Enabled "false" }}
   # Database configuration
