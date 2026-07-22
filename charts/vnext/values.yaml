@@ -17,6 +17,8 @@ global:
     #     metadata:
     #       - name: url
     #         value: http://mocklab:3001/api/notification/sms
+    #   auth:
+    #     secretStore: vnext-secret
     # - name: state
     #   spec:
     #     type: bindings.http
@@ -38,6 +40,8 @@ global:
     #         value: "kafka:9092"
     #       - name: authType
     #         value: none
+    #   auth:
+    #     secretStore: vnext-secret
 
   # Dynamic subscriptions for event-driven workflows.
   # Each entry renders a Dapr Subscription (v2alpha1) scoped to the orchestrator sidecar.

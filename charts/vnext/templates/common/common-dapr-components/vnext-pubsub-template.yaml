@@ -8,10 +8,11 @@ spec:
   type: {{ .spec.type }}
   version: {{ .spec.version }}
   metadata:
-  {{- range .spec.metadata }}
-    - name: {{ .name }}
-      value: {{ .value }}
-  {{- end }}
+  {{- toYaml .spec.metadata | nindent 4 }}
+{{- if .auth }}
+auth:
+  {{- toYaml .auth | nindent 2 }}
+{{- end }}
 scopes:
 - "vnext-{{ $.Values.global.appDomain }}-app"
 {{- end }}
