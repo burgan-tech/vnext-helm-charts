@@ -194,14 +194,20 @@ Usage: {{ include "vnext.appEnvVars" .Values.global.appEnvConfig }}
 
 {{/*
 Generate telemetry environment variables
-Usage: {{ include "vnext.telemetryEnvVars" (dict "serviceName" "vnext-app" "global" .Values.global "context" .) }}
+Usage: {{ include "vnext.telemetryEnvVars" (dict "serviceName" "vnext-app" "serviceVersion" (.Values.orchestrator.image.tag | default .Chart.AppVersion) "global" .Values.global "context" .) }}
 */}}
 {{- define "vnext.telemetryEnvVars" -}}
 {{- if .global.telemetry.enabled -}}
 Telemetry__ServiceName: {{ .serviceName | quote }}
+{{- if .serviceVersion }}
+Telemetry__ServiceVersion: {{ .serviceVersion | quote }}
+{{- end }}
 Telemetry__Otlp__Endpoint: {{ include "vnext.otelEndpoint" .context | quote }}
 Telemetry__Otlp__Protocol: {{ .global.telemetry.protocol | quote }}
 OTEL_SERVICE_NAME: {{ .serviceName | quote }}
+{{- if .serviceVersion }}
+OTEL_SERVICE_VERSION: {{ .serviceVersion | quote }}
+{{- end }}
 OTEL_EXPORTER_OTLP_ENDPOINT: {{ include "vnext.otelEndpoint" .context | quote }}
 OTEL_EXPORTER_OTLP_PROTOCOL: {{ .global.telemetry.protocol | quote }}
 {{- end -}}

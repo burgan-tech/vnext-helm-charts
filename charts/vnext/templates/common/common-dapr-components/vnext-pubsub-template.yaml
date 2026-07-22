@@ -15,4 +15,5 @@ auth:
 {{- end }}
 scopes:
 - "vnext-{{ $.Values.global.appDomain }}-app"
+- "vnext-{{ $.Values.global.appDomain }}-execution-app"
 {{- end }}
