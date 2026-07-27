@@ -59,6 +59,39 @@ global:
     #     # metadata:
     #     #   rawPayload: "true"
 
+  # Dynamic Dapr Conversation (AI/LLM) components for workflows.
+  # Each entry renders a Dapr Component scoped to the execution (vnext-<appDomain>-execution-app) sidecar,
+  # since the DaprConversationTask runs inside the Execution API.
+  # The component name is used verbatim; reference it from a workflow's DaprConversationTask componentName.
+  # Provider API keys should be supplied via secretKeyRef (see auth.secretStore below), not inline values.
+  conversationComponents: []
+    # - name: openai
+    #   spec:
+    #     type: conversation.openai
+    #     version: v1
+    #     metadata:
+    #       - name: key
+    #         secretKeyRef:
+    #           name: vnext-secret
+    #           key: openai-api-key
+    #       - name: model
+    #         value: gpt-4o-mini
+    #   auth:
+    #     secretStore: vnext-secret
+    # - name: anthropic
+    #   spec:
+    #     type: conversation.anthropic
+    #     version: v1
+    #     metadata:
+    #       - name: key
+    #         secretKeyRef:
+    #           name: vnext-secret
+    #           key: anthropic-api-key
+    #       - name: model
+    #         value: claude-3-5-sonnet-20240620
+    #   auth:
+    #     secretStore: vnext-secret
+
   # External Vault configuration
   # Use this when connecting to an existing HashiCorp Vault instance
   externalVault: 

@@ -248,6 +248,45 @@ global:
 
 Her iki liste de varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz). Bu, dinamik notification binding'leri için mevcut `global.notificationComponents` desenini takip eder.
 
+#### Dapr Conversation Bileşenleri (AI/LLM)
+
+Workflow'lar, workflow runtime'ındaki `DaprConversationTask` aracılığıyla Dapr'ın [Conversation](https://docs.dapr.io/developing-applications/building-blocks/conversation/) yapı taşını kullanarak LLM/AI sağlayıcılarını (OpenAI, Anthropic, AWS Bedrock vb.) çağırabilir. Sağlayıcıları değerler üzerinden tanımlarsınız; her giriş, **yalnızca execution (`vnext-<appDomain>-execution-app`) sidecar'ına scope'lanmış** bir Dapr Component olarak oluşturulur, çünkü conversation task'ı Execution API içinde çalışır. Böylece sağlayıcı API anahtarları diğer sidecar'lara açılmaz.
+
+```yaml
+global:
+  # Conversation bileşenleri — `name`, bir workflow'un DaprConversationTask'ının `componentName`
+  # ile referans verdiği değerdir. API anahtarlarını inline value yerine secretKeyRef ile verin.
+  conversationComponents:
+    - name: openai
+      spec:
+        type: conversation.openai
+        version: v1
+        metadata:
+          - name: key
+            secretKeyRef:
+              name: vnext-secret
+              key: openai-api-key
+          - name: model
+            value: gpt-4o-mini
+      auth:
+        secretStore: vnext-secret
+    - name: anthropic
+      spec:
+        type: conversation.anthropic
+        version: v1
+        metadata:
+          - name: key
+            secretKeyRef:
+              name: vnext-secret
+              key: anthropic-api-key
+          - name: model
+            value: claude-3-5-sonnet-20240620
+      auth:
+        secretStore: vnext-secret
+```
+
+Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz). Dapr 1.15+ gerektirir (paketlenmiş Dapr subchart bunu karşılar). `spec.metadata` ve `auth` birebir aktarılır; bu nedenle sağlayıcıya özgü tüm metadata ve `secretKeyRef` yapıları desteklenir.
+
 #### Telemetri Yapılandırması
 
 ```yaml

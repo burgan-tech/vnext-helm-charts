@@ -1,0 +1,18 @@
+{{- range .Values.global.conversationComponents }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .name }}
+spec:
+  type: {{ .spec.type }}
+  version: {{ .spec.version }}
+  metadata:
+  {{- toYaml .spec.metadata | nindent 4 }}
+{{- if .auth }}
+auth:
+  {{- toYaml .auth | nindent 2 }}
+{{- end }}
+scopes:
+- "vnext-{{ $.Values.global.appDomain }}-execution-app"
+{{- end }}
