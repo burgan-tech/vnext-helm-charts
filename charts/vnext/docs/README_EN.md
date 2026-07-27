@@ -248,6 +248,45 @@ global:
 
 Both lists default to `[]` (nothing rendered). This mirrors the existing `global.notificationComponents` pattern for dynamic notification bindings.
 
+#### Dapr Conversation Components (AI/LLM)
+
+Workflows can call LLM/AI providers (OpenAI, Anthropic, AWS Bedrock, etc.) through Dapr's [Conversation](https://docs.dapr.io/developing-applications/building-blocks/conversation/) building block via the workflow runtime's `DaprConversationTask`. Declare the providers from values; each entry renders a Dapr Component **scoped to the execution (`vnext-<appDomain>-execution-app`) sidecar only**, since the conversation task runs inside the Execution API. This keeps provider API keys off every other sidecar.
+
+```yaml
+global:
+  # Conversation components — the `name` is what a workflow's DaprConversationTask references
+  # via its `componentName`. Supply API keys through secretKeyRef, not inline values.
+  conversationComponents:
+    - name: openai
+      spec:
+        type: conversation.openai
+        version: v1
+        metadata:
+          - name: key
+            secretKeyRef:
+              name: vnext-secret
+              key: openai-api-key
+          - name: model
+            value: gpt-4o-mini
+      auth:
+        secretStore: vnext-secret
+    - name: anthropic
+      spec:
+        type: conversation.anthropic
+        version: v1
+        metadata:
+          - name: key
+            secretKeyRef:
+              name: vnext-secret
+              key: anthropic-api-key
+          - name: model
+            value: claude-3-5-sonnet-20240620
+      auth:
+        secretStore: vnext-secret
+```
+
+The list defaults to `[]` (nothing rendered). Requires Dapr 1.15+ (the bundled Dapr subchart satisfies this). `spec.metadata` and `auth` are passed through verbatim, so any provider-specific metadata and `secretKeyRef` structures are supported.
+
 #### Telemetry Configuration
 
 ```yaml
