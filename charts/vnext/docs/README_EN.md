@@ -156,7 +156,7 @@ Common environment variables applied to all .NET services:
 global:
   dotnetEnv:
     DOTNET_NUGET_SIGNATURE_VERIFICATION: "false"
-    DOTNET_USE_POLLING_FILE_WATCHER: "1"
+    DOTNET_USE_POLLING_FILE_WATCHER: "0"
     DOTNET_RUNNING_IN_CONTAINER: "true"
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
     ASPNETCORE_ENVIRONMENT: "Development"

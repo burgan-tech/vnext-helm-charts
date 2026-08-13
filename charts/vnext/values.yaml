@@ -123,7 +123,7 @@ global:
     # Disable NuGet package signature verification for faster builds
     DOTNET_NUGET_SIGNATURE_VERIFICATION: "false"
     # Use polling for file system changes (required in some container environments)
-    DOTNET_USE_POLLING_FILE_WATCHER: "1"
+    DOTNET_USE_POLLING_FILE_WATCHER: "0"
     # Indicate running in containerized environment
     DOTNET_RUNNING_IN_CONTAINER: "true"
     # Use invariant globalization (reduces image size and improves performance)
@@ -377,8 +377,9 @@ orchestrator:
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
-  
-  podAnnotations: {}
+
+  podAnnotations:
+    dapr.io/config: appconfig
   podLabels: {}
   podSecurityContext: {}
   
@@ -467,8 +468,8 @@ orchestrator:
     Vault__Enabled: "true"
     # Default logging level (Trace, Debug, Information, Warning, Error, Critical)
     Logging__LogLevel__Default: "Debug"
-    # SignalR hub configuration for real-time communication
-    SignalR__AppId: "http://localhost:6203"
+    # Base path for URL templates (empty = no base path)
+    UrlTemplates__BasePath: ""
 
   # ---------------------------------------------------------------------------
   # Plugins
@@ -590,8 +591,9 @@ execution:
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
-  
-  podAnnotations: {}
+
+  podAnnotations:
+    dapr.io/config: appconfig
   podLabels: {}
   podSecurityContext: {}
   
@@ -677,8 +679,9 @@ worker-inbox:
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
-  
-  podAnnotations: {}
+
+  podAnnotations:
+    dapr.io/config: appconfig
   podLabels: {}
   podSecurityContext: {}
   
@@ -782,8 +785,9 @@ worker-outbox:
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
-  
-  podAnnotations: {}
+
+  podAnnotations:
+    dapr.io/config: appconfig
   podLabels: {}
   podSecurityContext: {}
   
@@ -952,8 +956,9 @@ db-migrator:
     # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
     # Used for service discovery and pub/sub
     appId: ""
-  
-  podAnnotations: {}
+
+  podAnnotations:
+    dapr.io/config: appconfig
   podLabels: {}
 
   # Uses global.resources.default if empty
