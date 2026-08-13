@@ -199,6 +199,7 @@ Usage: {{ include "vnext.telemetryEnvVars" (dict "serviceName" "vnext-app" "serv
 {{- define "vnext.telemetryEnvVars" -}}
 {{- if .global.telemetry.enabled -}}
 Telemetry__ServiceName: {{ .serviceName | quote }}
+Telemetry__ServiceNamespace: {{ .global.appDomain | quote }}
 {{- if .serviceVersion }}
 Telemetry__ServiceVersion: {{ .serviceVersion | quote }}
 {{- end }}
