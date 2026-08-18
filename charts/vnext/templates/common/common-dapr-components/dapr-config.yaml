@@ -12,7 +12,7 @@ spec:
     enabled: true
   tracing:
     otel:
-      endpointAddress: {{ include "vnext.otelEndpoint" . | quote }}
+      endpointAddress: {{ include "vnext.otelEndpoint" . | trimPrefix "http://" | trimPrefix "https://" | quote }}
       isSecure: false
       protocol: http
     samplingRate: "1"
