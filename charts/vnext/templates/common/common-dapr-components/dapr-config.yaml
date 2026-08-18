@@ -14,5 +14,17 @@ spec:
     otel:
       endpointAddress: {{ include "vnext.otelEndpoint" . | trimPrefix "http://" | trimPrefix "https://" | quote }}
       isSecure: false
-      protocol: http
+      # Must agree with the port in endpointAddress above: a collector serves OTLP/gRPC on 4317
+      # and OTLP/HTTP on 4318. This was hardcoded to `http` while every endpoint the chart
+      # produces ends in :4317, so the sidecar POSTed OTLP/HTTP at a gRPC-only receiver and every
+      # span it created was dropped — silently, because Dapr logs no exporter error. The app was
+      # unaffected: it reads global.telemetry.protocol directly. So app spans arrived while
+      # sidecar spans never did, and each callee transaction was left naming a parent span no
+      # backend ever received, which Elastic APM re-roots to the trace root — detaching the whole
+      # Execution subtree from the `Dapr invoke` span that caused it.
+      #
+      # Derived from the same value the app uses, so the two can no longer disagree. Dapr accepts
+      # only `grpc` or `http`; the .NET side spells the HTTP option `http/protobuf`, hence the
+      # mapping instead of a passthrough.
+      protocol: {{ if hasPrefix "http" .Values.global.telemetry.protocol }}http{{ else }}grpc{{ end }}
     samplingRate: "1"
