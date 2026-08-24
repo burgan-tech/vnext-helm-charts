@@ -32,14 +32,6 @@ data:
   DAPR_APP_ID: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
   OrchestrationApi__AppId: {{ .Values.orchestrator.dapr.appId | default (printf "vnext-%s-app" .Values.global.appDomain) | quote }}
 
-  # ClickHouse configuration
-  {{- if .Values.global.database.clickhouse.enabled }}
-  ClickHouse__Enabled: "true"
-  ClickHouse__ConnectionString: {{ .Values.global.database.clickhouse.connectionString | quote }}
-  {{- else }}
-  ClickHouse__Enabled: "false"
-  {{- end }}
-  
   # Component-specific environment variables
   {{- if .Values.execution.extraEnvConfig }}
   {{- range $key, $value := .Values.execution.extraEnvConfig }}
