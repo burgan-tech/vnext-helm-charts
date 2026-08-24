@@ -536,3 +536,39 @@ Usage: {{ include "vnext.plugins.tokenEnv" . | nindent 12 }}
 {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+Name of the ConfigMap holding runtimeconfig.json.
+*/}}
+{{- define "vnext.runtimeConfig.name" -}}
+{{- printf "%s-runtime-config" (include "vnext.fullname" .) -}}
+{{- end -}}
+
+{{/*
+The ConfigMap volume carrying runtimeconfig.json.
+Usage: {{ include "vnext.runtimeConfig.volume" . | nindent 8 }}
+*/}}
+{{- define "vnext.runtimeConfig.volume" -}}
+{{- if .Values.global.runtimeConfigJson -}}
+- name: runtime-config
+  configMap:
+    name: {{ include "vnext.runtimeConfig.name" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Mounts runtimeconfig.json as a single file under /app. A subPath mount is used
+on purpose: /app already holds the application, so mounting the ConfigMap as a
+directory would shadow it.
+Note: subPath mounts are not refreshed when the ConfigMap changes, so consuming
+deployments carry a checksum/runtime-config annotation to force a pod roll.
+Usage: {{ include "vnext.runtimeConfig.volumeMount" . | nindent 12 }}
+*/}}
+{{- define "vnext.runtimeConfig.volumeMount" -}}
+{{- if .Values.global.runtimeConfigJson -}}
+- name: runtime-config
+  mountPath: /app/runtimeconfig.json
+  subPath: runtimeconfig.json
+  readOnly: true
+{{- end -}}
+{{- end -}}

@@ -25,6 +25,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
         "checksum/config": {{ include (print $.Template.BasePath "/worker-inbox/configmap.yaml") . | sha256sum }}
+        "checksum/runtime-config": {{ include (print $.Template.BasePath "/common/runtime-configmap.yaml") . | sha256sum }}
       labels:
         {{- include "vnext.componentLabels" (dict "context" . "component" "worker-inbox") | nindent 8 }}
         {{- with $workerInbox.podLabels }}
@@ -69,13 +70,21 @@ spec:
           resources:
             {{- $resources | nindent 12 }}
           {{- end }}
-          {{- with $workerInbox.volumeMounts }}
+          {{- $runtimeMount := include "vnext.runtimeConfig.volumeMount" . }}
+          {{- if or $workerInbox.volumeMounts $runtimeMount }}
           volumeMounts:
+            {{- with $workerInbox.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with $runtimeMount }}{{- . | nindent 12 }}{{- end }}
           {{- end }}
-      {{- with $workerInbox.volumes }}
+      {{- $runtimeVol := include "vnext.runtimeConfig.volume" . }}
+      {{- if or $workerInbox.volumes $runtimeVol }}
       volumes:
+        {{- with $workerInbox.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $runtimeVol }}{{- . | nindent 8 }}{{- end }}
       {{- end }}
       {{- with $workerInbox.nodeSelector }}
       nodeSelector:

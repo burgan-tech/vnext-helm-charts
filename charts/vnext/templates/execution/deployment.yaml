@@ -26,6 +26,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
         "checksum/config": {{ include (print $.Template.BasePath "/execution/configmap.yaml") . | sha256sum }}
+        "checksum/runtime-config": {{ include (print $.Template.BasePath "/common/runtime-configmap.yaml") . | sha256sum }}
       labels:
         {{- include "vnext.componentLabels" (dict "context" . "component" "execution") | nindent 8 }}
         {{- with .Values.execution.podLabels }}
@@ -70,13 +71,21 @@ spec:
           resources:
             {{- $resources | nindent 12 }}
           {{- end }}
-          {{- with .Values.execution.volumeMounts }}
+          {{- $runtimeMount := include "vnext.runtimeConfig.volumeMount" . }}
+          {{- if or .Values.execution.volumeMounts $runtimeMount }}
           volumeMounts:
+            {{- with .Values.execution.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with $runtimeMount }}{{- . | nindent 12 }}{{- end }}
           {{- end }}
-      {{- with .Values.execution.volumes }}
+      {{- $runtimeVol := include "vnext.runtimeConfig.volume" . }}
+      {{- if or .Values.execution.volumes $runtimeVol }}
       volumes:
+        {{- with .Values.execution.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $runtimeVol }}{{- . | nindent 8 }}{{- end }}
       {{- end }}
       {{- with .Values.execution.nodeSelector }}
       nodeSelector:
