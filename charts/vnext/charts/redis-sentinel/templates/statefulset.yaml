@@ -1,3 +1,5 @@
+{{- $probesV := include "redis-sentinel.probesValues" . | fromYaml -}}
+{{- $gsV := include "redis-sentinel.gracefulShutdownValues" . | fromYaml -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -28,11 +30,23 @@ spec:
         prometheus.io/path: "/metrics"
         {{- end }}
         {{- end }}
+      # app.kubernetes.io/component distinguishes the Redis pods from the chart's
+      # Job pods, which carry the same name+instance selectorLabels. Without it a
+      # PodDisruptionBudget selecting on those two labels also matches a COMPLETED
+      # init-job pod: that pod is not Ready but still counts toward the PDB's
+      # expected total, so allowed-disruptions drops to 0 and node drains are
+      # blocked until the job's ttlSecondsAfterFinished expires.
+      #
+      # Added to the POD TEMPLATE only. spec.selector and
+      # volumeClaimTemplates.metadata.labels are IMMUTABLE and deliberately keep
+      # just name+instance - putting it there would make every existing release
+      # unupgradable.
       labels:
         {{- include "redis-sentinel.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
     spec:
       # Allow sufficient time for preStop hooks to save state
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
       serviceAccountName: {{ include "redis-sentinel.serviceAccountName" . }}
       {{- if .Values.openshift.enabled }}
       {{- with .Values.securityContext.openshift }}
@@ -73,7 +87,7 @@ spec:
       containers:
       # Redis container
       - name: redis
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: {{ include "redis-sentinel.image" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         {{- if .Values.openshift.enabled }}
         {{- with .Values.containerSecurityContext.openshift }}
@@ -117,35 +131,251 @@ spec:
               - /bin/sh
               - -c
               - |
-                # Force Redis to save state before shutdown
-                echo "PreStop: Saving Redis state..."
-                {{- if .Values.tls.enabled }}
-                redis-cli -a "$REDIS_PASSWORD" -p {{ .Values.tls.redis.port | default .Values.redis.port }} --tls --cacert /etc/redis/tls/ca.crt SAVE 2>/dev/null || echo "Note: SAVE failed (pod may be shutting down)"
-                {{- else }}
-                redis-cli -a "$REDIS_PASSWORD" -p {{ .Values.redis.port }} SAVE 2>/dev/null || echo "Note: SAVE failed (pod may be shutting down)"
+                # preStop output is not captured in the pod log, so mirror it to
+                # PID 1's stdout to make the handover observable.
+                say() {
+                  echo "[preStop] $1"
+                  if [ -w /proc/1/fd/1 ]; then
+                    echo "[preStop] $1" >> /proc/1/fd/1 2>/dev/null
+                  fi
+                  return 0
+                }
+                {{- include "redis-sentinel.rcliFunc" . | nindent 16 }}
+                {{- include "redis-sentinel.scliFunc" . | nindent 16 }}
+                {{- include "redis-sentinel.scliAtFunc" . | nindent 16 }}
+
+                # NO `SAVE` here any more, and that is the point of this hook.
+                #
+                # SAVE is SYNCHRONOUS: it blocks the server for the whole snapshot.
+                # And it was redundant on top of that - on SIGTERM redis-server
+                # already performs a blocking save whenever save points are
+                # configured, so the chart was paying for TWO full snapshots inside
+                # one grace period. In the aof-only mode it was worse than
+                # redundant: it CREATED a dump.rdb that Redis will never read,
+                # because with appendonly yes it loads the AOF and ignores the RDB.
+                #
+                # It was also a silent no-op under the default TLS configuration:
+                # the old command passed --cacert but not --cert/--key while
+                # tls.redis.authClients defaults to true, so it always failed and
+                # the "|| echo Note: SAVE failed" hid it. The rcli helper above
+                # gets the flags right.
+                {{- if $gsV.enabled }}
+                ROLE=$(rcli INFO replication 2>/dev/null | grep '^role:' | cut -d: -f2 | tr -d '\r\n ')
+                say "role=$ROLE mode={{ include "redis-sentinel.persistenceMode" . }}"
+
+                if [ "$ROLE" = "master" ]; then
+                  # Hand mastership over before stopping.
+                  #
+                  # Without this the master simply disappears and Sentinel only
+                  # reacts after down-after-milliseconds ({{ .Values.sentinel.downAfterMilliseconds }}ms), during which
+                  # writes fail. Worse, in the diskless mode a master that restarts
+                  # faster than that is never marked down at all: it comes back
+                  # EMPTY, and the replicas full-resync from empty - losing the
+                  # WHOLE dataset, not one shard's worth.
+                  #
+                  # SENTINEL FAILOVER is a forced failover: it needs no quorum
+                  # agreement and hands the offset over cleanly.
+                  #
+                  # Sent to a PEER Sentinel, not to 127.0.0.1, and that is a fix. The
+                  # local one returns OK and then nothing happens: both containers in
+                  # this pod are terminating, the sentinel container's own preStop is
+                  # short, so its process takes SIGTERM a second or two from now -
+                  # while the failover it just accepted needs several seconds to select
+                  # a replica, promote it and reconfigure the others. It dies mid-way,
+                  # no peer ever logs +odown or +switch-master, and this node is still
+                  # master when the timeout expires. Measured on a live release:
+                  #
+                  #   [preStop]   Sentinel: OK
+                  #   [preStop] handover did NOT complete in 20s (still master)
+                  #
+                  # In the diskless mode that is not an inconvenience but a total loss:
+                  # the pod returns with master_repl_offset:0 and both replicas
+                  # full-resync from an empty master.
+                  #
+                  # Peer FQDNs are built the same way start-redis.sh builds them.
+                  #
+                  # EVERY peer is asked, and the loop does not stop at the first OK.
+                  #
+                  # Skipping ourselves needs our own pod name. $HOSTNAME does carry it -
+                  # measured on redis:8.8.0-alpine, the runtime sets it and it equals
+                  # `hostname`, which for a StatefulSet pod is the pod name - and
+                  # start-redis.sh already derives POD_INDEX from it the same way. So the
+                  # skip works. Correctness just must not DEPEND on it: on a runtime that
+                  # did not set it we would ask pod-0, possibly ourselves, take the same
+                  # useless OK from our own dying Sentinel, break, and reintroduce this
+                  # exact bug while appearing to work. A second SENTINEL FAILOVER lands as
+                  # -INPROG, which the classification below already treats as fine, so
+                  # asking all of them costs one round trip and removes the dependency.
+                  #
+                  # When we DO know who we are we stop at the first OK, because two
+                  # sentinels each starting a forced failover is not free: measured on a
+                  # live release both answered OK rather than the -INPROG this comment
+                  # first predicted, and two forced failovers can in principle pick
+                  # different replicas. The outcome was clean there, but "it worked once"
+                  # is not a reason to keep issuing the second one when it buys nothing.
+                  _me="${HOSTNAME:-$(hostname 2>/dev/null)}"
+                  FO=""
+                  for _i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
+                    _peer="{{ include "redis-sentinel.fullname" . }}-${_i}"
+                    if [ -n "$_me" ] && [ "$_peer" = "$_me" ]; then
+                      continue
+                    fi
+                    _peer="${_peer}.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+                    _r=$(scli_at "$_peer" SENTINEL FAILOVER mymaster 2>&1 | tr '\r\n' '  ')
+                    say "asked the Sentinel on pod-${_i}: ${_r:-<no answer>}"
+                    # Keep the FIRST real answer for the classification below; any later
+                    # reply must not overwrite it.
+                    [ -z "$FO" ] && FO="$_r"
+                    # One accepted request is enough - but only stop early if we could
+                    # rule ourselves out, or the OK may have come from our own Sentinel.
+                    if [ -n "$_me" ] && [ -n "$_r" ]; then
+                      case "$_r" in
+                        *NOGOODSLAVE*|*ERR*|*error*) ;;
+                        *) break ;;
+                      esac
+                    fi
+                  done
+                  if [ -z "$FO" ]; then
+                    say "no peer Sentinel answered - falling back to the local one"
+                    say "  (a local failover often dies with this pod - see the comment above)"
+                    FO=$(scli SENTINEL FAILOVER mymaster 2>&1 | tr '\r\n' '  ')
+                  fi
+                  # ACCEPTED decides whether it is worth waiting at all. When Sentinel
+                  # refuses, the handover will never happen, and burning the whole
+                  # failoverTimeout on a loop that cannot succeed takes that time away
+                  # from redis-server's own shutdown - which is the budget this hook
+                  # exists to protect.
+                  ACCEPTED=yes
+                  case "$FO" in
+                    *NOGOODSLAVE*)
+                      ACCEPTED=no
+                      say "  Sentinel: no eligible replica ($FO)"
+                      say "  Stopping without a handover; writes will fail until Sentinel"
+                      say "  notices, and in diskless mode the dataset may be lost." ;;
+                    *INPROG*|*already*)
+                      say "  Sentinel: a failover is already in progress ($FO)" ;;
+                    *ERR*|*error*)
+                      # Sentinel rate-limits repeat failovers within
+                      # sentinel.failoverTimeout ({{ .Values.sentinel.failoverTimeout }}ms), which is normal during a
+                      # rolling update that lands mastership on a lower ordinal.
+                      ACCEPTED=no
+                      say "  Sentinel refused: $FO" ;;
+                    *)
+                      say "  Sentinel: ${FO:-OK}" ;;
+                  esac
+
+                  [ "$ACCEPTED" = "no" ] && WAITED={{ include "redis-sentinel.gracefulShutdown.failoverTimeoutEffective" . }}
+                  WAITED=${WAITED:-0}
+                  while [ "$WAITED" -lt {{ include "redis-sentinel.gracefulShutdown.failoverTimeoutEffective" . }} ]; do
+                    ROLE=$(rcli INFO replication 2>/dev/null | grep '^role:' | cut -d: -f2 | tr -d '\r\n ')
+                    if [ "$ROLE" = "slave" ]; then
+                      say "handover complete after ${WAITED}s - this node is now a replica"
+                      break
+                    fi
+                    sleep 1
+                    WAITED=$((WAITED + 1))
+                  done
+                  if [ "$ROLE" != "slave" ]; then
+                    if [ "$ACCEPTED" = "no" ]; then
+                      say "no handover happened (still $ROLE) - not waiting, Sentinel refused"
+                    else
+                      say "handover did NOT complete in {{ include "redis-sentinel.gracefulShutdown.failoverTimeoutEffective" . }}s (still $ROLE) - stopping anyway"
+                    fi
+                  fi
+                else
+                  say "not a master - no handover needed"
+                fi
                 {{- end }}
-                # Force filesystem sync
+
+                # Flush acknowledged writes. Only meaningful while still a master.
+                ROLE_NOW=$(rcli INFO replication 2>/dev/null | grep '^role:' | cut -d: -f2 | tr -d '\r\n ')
+                if [ "$ROLE_NOW" = "master" ]; then
+                  ACKED=$(rcli WAIT 1 {{ mul (int ($gsV.waitTimeoutSeconds)) 1000 }} 2>/dev/null | tr -d '\r\n ')
+                  case "$ACKED" in
+                    '')       say "WAIT returned nothing - could not confirm replication" ;;
+                    0)        say "WAIT: acknowledged writes have NOT reached any replica" ;;
+                    *[!0-9]*) say "WAIT returned '$ACKED'" ;;
+                    *)        say "WAIT: $ACKED replica(s) caught up" ;;
+                  esac
+                  {{- if eq (include "redis-sentinel.persistence.aof" .) "true" }}
+                  # appendfsync everysec leaves up to ~1s of acknowledged writes in the AOF
+                  # buffer only. WAITAOF forces that fsync before we stop.
+                  #
+                  # INSIDE the "still a master" branch, and that placement is the fix rather
+                  # than a workaround. Redis refuses the command on a replica:
+                  #
+                  #   ERR WAITAOF cannot be used with replica instances.
+                  #
+                  # It used to run after the handover, by which point this node had just been
+                  # demoted - so on every graceful master shutdown, the one case it was
+                  # written for, it errored and logged that the server was too old. Measured
+                  # on redis 8.8.0: master answers `1 1`, replica answers that error.
+                  #
+                  # And a demoted node does not need it. CLUSTER FAILOVER only promotes a
+                  # replica that has caught up to this master's offset, so the writes live on
+                  # the new master; this pod comes back as a replica and resyncs, making its
+                  # own AOF irrelevant. Where the AOF IS the only copy is exactly here: still
+                  # a master at shutdown, because there was no replica to hand to or
+                  # gracefulShutdown is off. A replica cannot force its own fsync at all -
+                  # Redis offers no command for it - and does not need to for the same reason.
+                  AOFACK=$(rcli WAITAOF 1 0 {{ mul (int ($gsV.waitTimeoutSeconds)) 1000 }} 2>&1 | tr '\r\n' '  ')
+                  # Report the ERROR TEXT, and blame the server version only when the server
+                  # actually says it does not know the command.
+                  case "$AOFACK" in
+                    *'unknown command'*|*'unknown COMMAND'*)
+                      say "WAITAOF not supported by this server (needs Redis >= 7.2) - relying on appendfsync" ;;
+                    *ERR*|*error*|*WRONGTYPE*|*NOAUTH*)
+                      say "WAITAOF failed, relying on appendfsync instead: $AOFACK" ;;
+                    '')
+                      say "WAITAOF returned nothing" ;;
+                    *)
+                      say "WAITAOF: local AOF fsynced [$AOFACK]" ;;
+                  esac
+                  {{- end }}
+                fi
+                {{- if eq (include "redis-sentinel.persistence.durable" .) "true" }}
+                # Forensic record of what was pending at shutdown.
+                rcli INFO persistence 2>/dev/null \
+                  | grep -E '^(aof_last_write_status|aof_rewrite_in_progress|rdb_bgsave_in_progress|rdb_last_bgsave_status|rdb_changes_since_last_save):' \
+                  | tr -d '\r' | while read -r l; do say "  $l"; done
+                {{- end }}
                 sync
-                sleep 2
-                echo "PreStop: Redis state saved"
+                say "done"
+        {{- if $probesV.startup.enabled }}
+        # Off by default. While a startup probe fails the kubelet runs neither
+        # liveness nor readiness, which is the right shape for a long AOF replay -
+        # but exhausting failureThreshold KILLS the container, and the restart starts
+        # the load over. With a loading-aware readiness probe and a PING liveness
+        # probe an over-long load already produces a pod that is NotReady and safe
+        # indefinitely, so this is opt-in for teams that want a bounded startup.
+        startupProbe:
+          exec:
+            command:
+            - sh
+            - /scripts/startup-check-redis.sh
+          initialDelaySeconds: {{ $probesV.startup.initialDelaySeconds }}
+          periodSeconds: {{ $probesV.startup.periodSeconds }}
+          timeoutSeconds: {{ $probesV.startup.timeoutSeconds }}
+          failureThreshold: {{ $probesV.startup.failureThreshold }}
+        {{- end }}
         livenessProbe:
           exec:
             command:
             - sh
             - /scripts/health-check-redis.sh
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 5
+          initialDelaySeconds: {{ $probesV.liveness.initialDelaySeconds }}
+          periodSeconds: {{ $probesV.liveness.periodSeconds }}
+          timeoutSeconds: {{ $probesV.liveness.timeoutSeconds }}
+          failureThreshold: {{ $probesV.liveness.failureThreshold }}
         readinessProbe:
           exec:
             command:
             - sh
-            - /scripts/health-check-redis.sh
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
+            - /scripts/readiness-check-redis.sh
+          initialDelaySeconds: {{ $probesV.readiness.initialDelaySeconds }}
+          periodSeconds: {{ $probesV.readiness.periodSeconds }}
+          timeoutSeconds: {{ $probesV.readiness.timeoutSeconds }}
+          failureThreshold: {{ $probesV.readiness.failureThreshold }}
         resources:
           {{- toYaml .Values.resources.redis | nindent 10 }}
         volumeMounts:
@@ -166,7 +396,7 @@ spec:
       
       # Sentinel container
       - name: sentinel
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: {{ include "redis-sentinel.image" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         {{- if .Values.openshift.enabled }}
         {{- with .Values.containerSecurityContext.openshift }}
@@ -208,17 +438,19 @@ spec:
               - /bin/sh
               - -c
               - |
-                # Force Sentinel to save state before shutdown
-                echo "PreStop: Saving Sentinel state..."
-                {{- if .Values.tls.enabled }}
-                redis-cli -a "$SENTINEL_PASSWORD" -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt SENTINEL FLUSHCONFIG 2>/dev/null || echo "Note: SENTINEL FLUSHCONFIG failed (pod may be shutting down)"
-                {{- else }}
-                redis-cli -a "$SENTINEL_PASSWORD" -p {{ .Values.sentinel.port }} SENTINEL FLUSHCONFIG 2>/dev/null || echo "Note: SENTINEL FLUSHCONFIG failed (pod may be shutting down)"
-                {{- end }}
-                # Force filesystem sync
+                # Persist Sentinel's own view (its config file is rewritten as the
+                # topology changes) so it comes back knowing the current master.
+                #
+                # The old command passed --cacert but not --cert/--key while
+                # tls.sentinel.authClients defaults to true, so under the default TLS
+                # configuration it always failed - and "|| echo Note: ... failed" hid
+                # it. The scli helper gets the flags right. The unconditional
+                # `sleep 2` is gone too: it just burned grace period.
+                {{- include "redis-sentinel.scliFunc" . | nindent 16 }}
+                scli SENTINEL FLUSHCONFIG > /dev/null 2>&1 \
+                  || echo "[preStop] SENTINEL FLUSHCONFIG failed (pod may already be shutting down)"
                 sync
-                sleep 2
-                echo "PreStop: Sentinel state saved"
+                echo "[preStop] sentinel config flushed"
         livenessProbe:
           exec:
             command:

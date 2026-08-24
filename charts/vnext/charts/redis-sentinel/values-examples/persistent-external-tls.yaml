@@ -8,9 +8,12 @@ replicaCount: 3
 
 # Docker image configuration
 image:
+  # Registry is named explicitly so mirrors / ImageContentSourcePolicy
+  # rules and audits can match on it. Use "" for the runtime default.
+  registry: docker.io
   repository: redis
   pullPolicy: IfNotPresent
-  tag: "8.2.2-alpine"
+  tag: "8.8.0-alpine"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -43,6 +46,21 @@ redis:
   # Redis port
   port: 6379
   
+
+  # Declared, not derived - and declaring it is also what opts this release into
+  # the durable-safe defaults and an authoritative persistence block.
+  persistenceMode: aof-rdb
+  # -> io-threads. "auto" derives max(1, min(cores - 2, 8)) from the container CPU
+  # limit, so it follows resources.limits.cpu instead of going stale when you change
+  # it. Below 4 cores it correctly derives to nothing - adding threads to a one- or
+  # two-core CFS quota only buys throttling.
+  #
+  # Set here rather than as a chart default because io-threads is NOT
+  # runtime-modifiable: defaulting it on would restart every existing release AND
+  # change how it schedules work, in an upgrade meant to be routine. A new install
+  # from this file gets it; an existing release is never changed behind its back.
+  ioThreads: "auto"
+
   # ========================================
   # PERSISTENCE CONFIGURATION
   # ========================================
@@ -55,13 +73,15 @@ redis:
     storageClass: ""  # Use default StorageClass, or specify (e.g., "gp3", "fast-ssd")
     accessMode: ReadWriteOnce
   
-  # ========================================
-  # REDIS SERVER CONFIGURATION
-  # ========================================
-  # Memory management
-  # For persistent storage, set to actual available memory
-  # Leave some headroom for Redis overhead (recommended: 75-80% of pod memory limit)
-  maxMemory: "2400mb"  # 80% of 3GB limit
+  # maxMemory is deliberately NOT pinned: it is derived from
+  # resources.limits.memory x redis.maxMemoryRatio, which the declared mode
+  # sets (0.8 for diskless, 0.6 for a durable mode - the durable one leaves
+  # room for the fork an AOF rewrite or BGSAVE does, where copy-on-write can
+  # push the child's RSS well above the parent's).
+  #
+  # Pinning it is the mistake to avoid here: redis.maxMemory WINS over the
+  # ratio, so raising resources.limits.memory would then change nothing and
+  # nothing in the rendered config would say so. Set the LIMIT, not this.
   
   # Memory eviction policy for persistent storage
   # "noeviction" - Never evict data, return error when memory limit reached
@@ -76,116 +96,20 @@ redis:
   # Every write operation is logged to disk
   appendonly: true
   
+  # Was hand-written into extraConfig. First-class now, and rendered
+  # BEFORE extraConfig - so anything you add there still wins.
+  network:
+    tcpKeepalive: 60
+
   # Extra Redis configuration for persistence
   # Based on Redis official documentation and production best practices
   extraConfig: |
-    # ========================================
-    # AOF (Append Only File) Configuration
-    # ========================================
-    # AOF fsync policy - determines when data is written to disk
-    # Options:
-    #   always  - fsync after every write (slowest, most durable)
-    #   everysec - fsync every second (balanced, RECOMMENDED)
-    #   no      - let OS decide when to fsync (fastest, least durable)
-    appendfsync everysec
-    
-    # Rewrite AOF file when it grows by this percentage
-    # This compacts the AOF file to reduce disk space
-    auto-aof-rewrite-percentage 100
-    
-    # Minimum size of AOF file to trigger rewrite
-    auto-aof-rewrite-min-size 64mb
-    
-    # Don't fsync during AOF rewrite to avoid disk I/O spikes
-    no-appendfsync-on-rewrite no
-    
-    # Load truncated AOF file on startup (recovery from incomplete writes)
-    aof-load-truncated yes
-    
-    # Use AOF-RDB hybrid format for faster restarts (Redis 4.0+)
-    # This combines AOF durability with RDB's fast loading
-    aof-use-rdb-preamble yes
-    
-    # ========================================
-    # RDB (Snapshot) Configuration
-    # ========================================
-    # RDB provides point-in-time snapshots as backup
-    # Format: save <seconds> <changes>
-    # Save if at least <changes> keys changed in <seconds>
-    
-    # Save after 15 minutes if at least 1 key changed
-    save 900 1
-    
-    # Save after 5 minutes if at least 10 keys changed
-    save 300 10
-    
-    # Save after 1 minute if at least 10000 keys changed
-    save 60 10000
-    
-    # Compress RDB files (recommended)
-    rdbcompression yes
-    
-    # Add checksum to RDB files for corruption detection
-    rdbchecksum yes
-    
-    # Stop accepting writes if RDB save fails (safety)
-    stop-writes-on-bgsave-error yes
-    
-    # ========================================
-    # Replication Configuration
-    # ========================================
-    # Serve stale data from replicas if master is down
-    replica-serve-stale-data yes
-    
-    # Make replicas read-only (recommended)
-    replica-read-only yes
-    
-    # Use diskless replication for better performance
-    # Master sends RDB directly to replicas over network
-    repl-diskless-sync yes
-    
-    # Delay before starting diskless sync (allow multiple replicas to connect)
-    repl-diskless-sync-delay 5
-    
-    # ========================================
-    # Connection and Performance
-    # ========================================
-    # TCP keepalive to detect dead connections
-    tcp-keepalive 60
-    
-    # Client timeout (0 = disabled)
-    timeout 0
-    
-    # Maximum number of connected clients
-    maxclients 10000
-    
-    # ========================================
-    # Slow Log Configuration
-    # ========================================
-    # Log queries slower than this (microseconds)
-    slowlog-log-slower-than 10000
-    
-    # Maximum length of slow log
-    slowlog-max-len 128
-    
-    # ========================================
-    # Advanced Configuration
-    # ========================================
-    # Disable transparent huge pages (THP) warning
-    # THP can cause latency issues with Redis
-    # (This is just to suppress warning, actual THP should be disabled at OS level)
-    
-    # Active defragmentation (Redis 4.0+)
-    # Helps reduce memory fragmentation over time
+    # Only what actually differs from the Redis defaults in this image.
+    # Everything else that used to be here was the default written out.
     activedefrag yes
-    
-    # Defragmentation thresholds
-    active-defrag-ignore-bytes 100mb
-    active-defrag-threshold-lower 10
     active-defrag-threshold-upper 20
     active-defrag-cycle-min 5
     active-defrag-cycle-max 75
-
 # TLS/SSL configuration
 tls:
   # Enable TLS for Redis and Sentinel connections
@@ -369,6 +293,9 @@ resources:
 # Important for persistent storage to prevent data loss
 podDisruptionBudget:
   enabled: true
+  # values.yaml pins maxUnavailable=1 and the template prefers it over
+  # minAvailable, so it has to be nulled out for minAvailable to apply.
+  maxUnavailable: null
   minAvailable: 2  # Always keep at least 2 nodes available
 
 # Pod anti-affinity
@@ -413,11 +340,16 @@ openshift:
 # The security context is now managed through the openshift.enabled flag
 # See main values.yaml for full securityContext configuration
 securityContext:
-  runAsNonRoot: true
-  # Uncomment below for non-OpenShift environments if needed:
-  # runAsUser: 999
-  # runAsGroup: 999
-  # fsGroup: 999
+  # The chart picks ONE of these two blocks based on openshift.enabled.
+  # A flat runAsNonRoot/runAsUser here would be silently ignored - the templates
+  # only read securityContext.kubernetes and securityContext.openshift.
+  kubernetes:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  # Leave empty on OpenShift so the SCC assigns UIDs/GIDs automatically
+  openshift: {}
 
 podSecurityContext:
   sysctls: []
@@ -435,6 +367,7 @@ updateStrategy:
 metrics:
   enabled: true
   image:
+    registry: docker.io
     repository: oliver006/redis_exporter
     tag: v1.79.0
     pullPolicy: IfNotPresent
@@ -463,6 +396,7 @@ metrics:
 sentinelExporter:
   enabled: true
   image:
+    registry: docker.io
     repository: oliver006/redis_exporter
     tag: v1.79.0
     pullPolicy: IfNotPresent

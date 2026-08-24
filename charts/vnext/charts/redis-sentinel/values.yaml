@@ -6,9 +6,14 @@ replicaCount: 3
 
 # Docker image configuration
 image:
+  # Container image registry. Written explicitly into every image reference
+  # so that mirrors / ImageContentSourcePolicy rules and audits can match on
+  # it. Set to "" to fall back to the container runtime default (implicit
+  # docker.io), or point it at an internal registry.
+  registry: docker.io
   repository: redis
   pullPolicy: IfNotPresent
-  tag: "8.2.2-alpine"
+  tag: "8.8.0-alpine"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -55,23 +60,331 @@ redis:
     accessMode: ReadWriteOnce
   
   # Redis server configuration
-  # CRITICAL: Set maxMemory to 80-90% of pod limit (3Gi = 3221MB)
-  # Using 2560mb = 2.5GB = 78% of 3Gi pod limit
-  # If maxMemoryRatio is set, maxMemory will be calculated as maxMemoryRatio * redis container limit
-  maxMemoryRatio: 0.78
-
-  # If maxMemory is set, maxMemoryRatio will be ignored
-  # maxMemory: "2560mb"
+  #
+  # maxMemory wins when set (Redis units, e.g. "2560mb"). Otherwise maxmemory is
+  # maxMemoryRatio * resources.redis.limits.memory.
+  #
+  # Ratio and policy default to "" = DERIVE FROM THE MODE, and the derivation only
+  # engages once redis.persistenceMode is DECLARED:
+  #   diskless          -> 0.78 / allkeys-lru
+  #   declared durable  -> 0.6  / noeviction
+  # 0.6 leaves headroom for the BGSAVE / AOF-rewrite fork's copy-on-write. An
+  # OOMKill skips preStop, so the handover that protects the pair never runs.
+  # A release that has NOT declared the mode keeps today's 0.78 / noeviction.
+  maxMemoryRatio: ""
   maxMemory: ""
-  maxMemoryPolicy: "noeviction"
+  maxMemoryPolicy: ""
+
+  # ==========================================================================
+  # PERSISTENCE MODE - the single source of truth for durability
+  # ==========================================================================
+  #
+  # persistenceMode: diskless | aof | rdb | aof-rdb
+  #
+  #   diskless  no persistence: save "", appendonly no. A restarted pod comes back
+  #             EMPTY *with an emptyDir*. With redis.persistence.enabled=true it
+  #             measurably does not: a replica whose db is not empty stages its
+  #             full-sync RDB to the volume, and `save ""` does not stop Redis from
+  #             LOADING that on the next start. A diskless release here survived a
+  #             full scale-to-zero that way. NOTES warns about the combination.
+  #
+  #             When it DOES come back empty, in a Sentinel pair that is worse than
+  #             in a sharded cache:
+  #             a master that returns empty faster than down-after-milliseconds is
+  #             never marked down, so the replicas full-resync FROM EMPTY and the
+  #             WHOLE dataset is gone. Only sane with gracefulShutdown.enabled.
+  #   aof       append-only file only. Durable, bounded loss window, restart time
+  #             grows with the AOF size.
+  #   rdb       snapshots only. Cheap restarts, loss window = gap since last save.
+  #   aof-rdb   both. This is what the chart renders TODAY by default.
+  #
+  # "" (default) = DERIVE from the two deprecated keys below, so an existing release
+  # keeps rendering exactly what it renders today:
+  #
+  #   persistence.enabled  appendonly   mode
+  #   true                 true         aof-rdb
+  #   true                 false        rdb
+  #   false                true         aof
+  #   false                false        diskless
+  #
+  # An active `save` in extraConfig upgrades the result (aof -> aof-rdb,
+  # diskless -> rdb); it never downgrades.
+  #
+  # NOTE: from 1.3.0 redis.persistence.enabled means STORAGE ONLY (PVC vs emptyDir).
+  # It keeps its derivation role above purely for upgrade compatibility.
+  #
+  #   helm upgrade <release> <chart> --reuse-values --set redis.persistenceMode=aof-rdb
+  persistenceMode: ""
+
+  # DEPRECATED: use persistenceMode. Read only while persistenceMode is empty.
   appendonly: true
-  
+
+  # NOT deprecated - the AOF fsync policy for the aof and aof-rdb modes. This was
+  # hardcoded to everysec in the template with no way to change it.
+  appendfsync: "everysec"
+
+  # AOF tuning (aof / aof-rdb modes). appenddirname needs Redis >= 7.0 and an
+  # unknown directive stops redis-server from starting, so it is emitted only when
+  # set - anyone pinning an older image.tag stays safe.
+  aof:
+    autoRewritePercentage: 100
+    autoRewriteMinSize: "64mb"
+    loadTruncated: true
+    useRdbPreamble: true
+    timestampEnabled: false
+    noAppendfsyncOnRewrite: false
+    appendfilename: "appendonly.aof"
+    appenddirname: ""
+
+  # RDB tuning (rdb / aof-rdb modes). savePoints is what this chart has always
+  # rendered when persistence was enabled.
+  rdb:
+    savePoints:
+      - "900 1"
+      - "300 10"
+      - "60 10000"
+    dbfilename: "dump.rdb"
+    compression: true
+    checksum: true
+    # Redis defaults this to yes, which makes a node REFUSE WRITES after a failed
+    # background save. On a PVC that filled up that turns a monitoring problem into
+    # a write outage for the whole pair, so the chart ships it off and the condition
+    # is reported instead (alert on redis_rdb_last_bgsave_status).
+    stopWritesOnBgsaveError: false
+
+  # Replication transport. Not configurable in this chart before 1.3.0.
+  replication:
+    replDisklessSync: true
+    replDisklessSyncDelay: 5
+    replBacklogSize: ""
+
+  # A replica whose master link is down: "yes" serves stale data, "no" errors.
+  # Empty = yes. In a Sentinel pair a disconnected replica may be the last copy of
+  # the data, so stale reads are usually better than refusing them - which is why
+  # this does NOT flip to "no" for durable modes the way redis-cluster's does.
+  replicaServeStaleData: ""
+
+  # -> shutdown-timeout (Redis >= 7.0). Seconds redis-server waits on SIGTERM for
+  # replicas to catch up. Empty = keep the Redis default (10). Counted in the
+  # terminationGracePeriodSeconds budget either way.
+  shutdownTimeout: ""
+
+  # Network. These were hardcoded in the template while the shipped extraConfig
+  # overrode two of them (tcp-keepalive 60 against a template writing 300, and
+  # timeout 0 twice). The defaults here are the values that were EFFECTIVE, so
+  # nothing changes - they are just no longer said twice.
+  network:
+    tcpBacklog: 511
+    timeout: 0
+    tcpKeepalive: 60
+
+  # -> io-threads. Redis executes commands on ONE thread; these threads only do
+  # socket reads, writes and protocol parsing. They help a node bottlenecked on
+  # many connections or large values, and do nothing for one bottlenecked on
+  # CPU-heavy commands.
+  #
+  #   ""      keep the Redis default (1 = no I/O threads). The default here.
+  #   "auto"  derive from resources.redis.limits.cpu: max(1, min(cores - 2, 8)).
+  #   <n>     pin it. 0 and 1 both collapse to "emit nothing".
+  #
+  # Empty rather than "auto" by default because io-threads is NOT runtime-
+  # modifiable: enabling it restarts every node and changes how it schedules work,
+  # which is not something a routine `helm upgrade` should do behind your back.
+  #
+  # Prefer "auto" over a pinned number. A pinned `io-threads 3` becomes wrong the
+  # moment someone edits the CPU limit, and nothing in the rendered config says so.
+  # "auto" tracks the limit, and NOTES.txt reports what it resolved to.
+  #
+  # Derived from the REDIS container's limit. The sentinel container is a separate
+  # process with its own (much smaller) resources.sentinel limits and is not
+  # affected either way.
+  ioThreads: ""
+
+  # -> io-threads-do-reads. FOR AN OLDER PINNED REDIS ONLY. Off by default, and on
+  # this chart's default image setting it true buys you nothing.
+  #
+  # Measured on redis:8.8.0-alpine: the directive is still ACCEPTED by the config
+  # parser (redis-server starts normally with it) but has disappeared from
+  # CONFIG GET, because Redis 8 folded the read/parse offload into io-threads
+  # itself. So on 8.x it is a retained-for-compatibility no-op, not a knob - and
+  # not a startup failure either.
+  #
+  # Worth setting only if you pin image.tag to a Redis 7.x, where it was a separate
+  # (and documented-as-smaller) win on top of io-threads. Emitted only when true.
+  ioThreadsDoReads: false
+
+  # -> lazyfree-lazy-eviction, lazyfree-lazy-expire, lazyfree-lazy-server-del,
+  # replica-lazy-flush. Frees big objects in a background thread instead of on the
+  # event loop.
+  #
+  # Worth turning on for a cache holding large values: without it, evicting one
+  # multi-MB object stalls every other client for the duration of the free. It
+  # also takes the flush a replica does before a full resync off the event loop -
+  # which in this chart is the flush that follows every Sentinel failover the
+  # replica could not partially resync through.
+  #
+  # Off by default because it is a real behaviour change for an existing release,
+  # not a free win: memory is reclaimed slightly later, so a node sitting at its
+  # maxmemory ceiling stays there longer than it used to.
+  #
+  # Deliberately excludes lazyfree-lazy-user-del and lazyfree-lazy-user-flush:
+  # those change what YOUR DEL and FLUSHALL do, which is a different decision from
+  # how Redis frees what it deletes on its own.
+  lazyFreeing: false
+
+  # When persistenceMode is declared, the persistence block is emitted AFTER
+  # extraConfig and any persistence directive in extraConfig is commented out with
+  # a note naming the value that replaces it. Set true to restore the pre-1.3.0
+  # precedence, where extraConfig always has the last word.
+  extraConfigOverridesPersistence: false
+
   # Extra Redis configuration
   # Will be appended to redis.conf
+  #
+  # Persistence, memory and network directives all have their own values now;
+  # repeating them here makes extraConfig fight the chart. See redis.aof.*,
+  # redis.rdb.*, redis.network.* and redis.maxMemory*.
   extraConfig: |
     # Custom Redis configuration
-    tcp-keepalive 60
-    timeout 0
+
+# Graceful shutdown: hand mastership over before this pod stops.
+#
+# Without it a stopping master simply disappears and Sentinel only reacts after
+# sentinel.downAfterMilliseconds, during which writes fail. In the diskless mode it is
+# worse: a master that restarts faster than that is never marked down at all, comes
+# back EMPTY, and the replicas full-resync from empty - so the WHOLE dataset is gone,
+# not one shard's worth.
+#
+# SENTINEL FAILOVER is a forced failover: no quorum agreement needed, and the offset
+# is handed over cleanly. Sent to the PEER Sentinels, not to this pod's own.
+#
+# The local one was the original design and it does not work: it answers OK and then
+# dies with the pod before the failover it accepted can select a replica, promote it
+# and reconfigure the others. Measured on a live release - "Sentinel: OK" followed by
+# "handover did NOT complete in 20s (still master)", and no +odown or +switch-master
+# in any peer's log. In the diskless mode that is a total data loss, because the pod
+# returns with master_repl_offset:0 and the replicas full-resync from it.
+#
+# Covers SIGTERM paths only (pod delete, rolling update, eviction, drain). An
+# ungraceful kill runs no preStop hook.
+gracefulShutdown:
+  enabled: true
+
+  # Seconds to wait for the handover. CLAMPED by the chart so it always fits the
+  # grace period - see terminationGracePeriodSeconds.
+  failoverTimeout: 20
+
+  # Seconds for WAIT (writes reached a replica) and, in aof modes, WAITAOF (local AOF
+  # fsynced). Closes the appendfsync=everysec window.
+  waitTimeoutSeconds: 3
+
+# Time the kubelet gives the preStop hook PLUS redis-server's own shutdown before
+# SIGKILL. Was hardcoded at 60; now a value with the same default.
+#
+# Budget:
+#   failoverTimeout + waitTimeoutSeconds + ~8s overhead + redis.shutdownTimeout
+#   + the blocking RDB save SIGTERM triggers   <=   this number
+#
+# For rdb/aof-rdb with a large dataset:
+#   terminationGracePeriodSeconds >= failoverTimeout + 15 + dataset / disk-write-MB/s
+terminationGracePeriodSeconds: 60
+
+# Probe tuning.
+#
+# liveness/readiness keep the numbers this chart has always used, so the only probe
+# change for an existing release is what the readiness script now checks.
+#
+# The startup probe is OFF by default here, unlike redis-cluster. There it ships on
+# because the health sidecar warns about an over-long load before the budget runs
+# out; this chart has no such net, and an exhausted startup probe kills the container
+# and restarts the load from zero. Loading-aware readiness plus PING liveness already
+# keeps a slow-loading pod out of the Service, safely, for as long as it needs.
+#
+# BUDGET when you do enable it: failureThreshold * periodSeconds, and exceeding it
+# CrashLoops. Size it as failureThreshold * periodSeconds >= 3 * (AOF_MB / 130),
+# from a measured AOF replay rate of ~130 MB/s (redis 8.8.0-alpine, OpenShift block
+# storage; 218 MB -> 1.719 s and 671 MB -> 5.125 s, linear within 3%). The default
+# 180 * 10s = 30 min covers ~78 GB of AOF at that rate.
+#
+# Measure your own with the number Redis prints - pod readiness cannot tell you,
+# because this chart's readiness initialDelaySeconds + periodSeconds dominate
+# anything under ~10 s:
+#
+#   kubectl logs <pod> -c redis | grep 'DB loaded from append only file'
+#
+# Not measured yet? Use ~1 min/GB. It is ~8x slower than the rate above, which is
+# the safe direction for a budget - but useless for predicting rollout duration.
+probes:
+  startup:
+    enabled: false
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 180
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Require the dataset to be fully loaded before a pod is Ready.
+#
+# Redis answers PING while it replays an AOF/RDB from disk, so without this a pod
+# that cannot serve anything is put into the Service and a rolling update moves on to
+# the next one. Harmless in the diskless mode, where loading is always 0.
+readinessRequiresLoaded: true
+
+# Require a live replication link before a REPLICA is Ready - but only when its
+# master is actually reachable.
+#
+# The guard is not optional decoration. Without it, the moment a master dies EVERY
+# replica reports master_link_status:down at once, so every pod goes NotReady and the
+# redis-sentinel Service loses ALL endpoints - for both the redis and the sentinel
+# port. Clients then cannot even reach Sentinel to learn the new master, for the whole
+# down-after-milliseconds + failover window. That is strictly worse than not checking.
+#
+#   role != slave                 -> Ready
+#   link up                       -> Ready
+#   link down, master reachable   -> NOT ready  (this pod is the problem; rollout waits)
+#   link down, master unreachable -> Ready      (serve stale reads)
+#
+# "Master reachable" is resolved through this pod's own Sentinel
+# (SENTINEL get-master-addr-by-name) and a PING to that address. A Sentinel that does
+# not answer counts as unreachable, so the probe fails OPEN.
+#
+# Note the coupling: a pod is Ready only when ALL its containers are, and the
+# redis-sentinel Service publishes both ports off the same endpoints. Clients doing
+# Sentinel discovery should therefore point at the HEADLESS service, which carries
+# publishNotReadyAddresses.
+readinessRequiresReplicationLink: true
+
+# Image for the chart's Kubernetes-tooling Jobs: the external-access restart, the TLS
+# certificate generation and renewal jobs and the release cleanup job. These run kubectl, not Redis, so they
+# do not use image.* above.
+#
+# The default is what this chart has always used, kept as-is so nothing moves. Two
+# reasons you may need to change it:
+#
+#   ARM. quay.io/openshift/origin-cli publishes no arm64 manifest, so on an ARM node
+#   every one of these Jobs fails with
+#     no matching manifest for linux/arm64/v8 in the manifest list entries
+#   and nothing else reports it. For external access that is silent and total: the
+#   restart Job is what produces the second boot on which the external IPs are
+#   announced, so without it the pods keep announcing pod IPs. Measured on an arm64
+#   cluster. A multi-arch image with kubectl and bash works, e.g.
+#     --set jobImage.registry="" --set jobImage.repository=bitnami/kubectl --set jobImage.tag=latest
+#
+#   Air-gapped or mirror-only registries. `latest` is also a moving tag, which is
+#   awkward to mirror and inconsistent with image.tag being pinned; pin it here.
+jobImage:
+  registry: quay.io
+  repository: openshift/origin-cli
+  tag: latest
 
 # TLS/SSL configuration
 tls:
@@ -204,9 +517,97 @@ externalAccess:
     # External traffic policy (Cluster or Local)
     # Local preserves source IP but requires nodes to have the pod
     externalTrafficPolicy: Cluster
+
+    # -----------------------------------------------------------------------
+    # NodePort only. Ignored for LoadBalancer, which needs none of it: there
+    # each pod gets its own address and the service port IS the reachable
+    # port, so announcing service.redisPort is already correct.
+    # -----------------------------------------------------------------------
+    #
+    # NodePort breaks Sentinel discovery unless this is set, because every pod
+    # is reached at the SAME address on a DIFFERENT port. Announcing one shared
+    # port, the way the LoadBalancer path does, sends clients to a port nothing
+    # is listening on.
+    #
+    # One entry per pod, in ordinal order. Must fall inside the API server's
+    # --service-node-port-range (30000-32767 by default) or the Service is
+    # rejected outright.
+    nodePorts:
+      redis: []       # e.g. [30001, 30002, 30003]
+      sentinel: []    # e.g. [31001, 31002, 31003]
+
+    # The address external clients reach your nodes at: one node's IP, or a VIP
+    # in front of them.
+    #
+    # REQUIRED for NodePort announcement, and empty is a deliberate default: it
+    # keeps this release rendering exactly what it renders today. Empty means
+    # the pods announce their in-cluster FQDN, so discovery works INSIDE the
+    # cluster and cannot work outside it - and NOTES says so rather than
+    # leaving you to find out from a client timeout.
+    #
+    # Why one shared address instead of each pod announcing its own node: on a
+    # fresh install every Sentinel writes `sentinel monitor` pointing at pod-0,
+    # so pod-1 has to know pod-0's EXTERNAL address - which it cannot learn if
+    # that address is "whichever node pod-0 landed on".
+    #
+    # Valid only with externalTrafficPolicy: Cluster, where any node routes to
+    # any pod. With Local, traffic to a node reaches only pods on THAT node, so
+    # one shared address is wrong; NOTES warns about the combination.
+    nodeHost: ""
   
-  # Timeout configuration for pod restart job
+  # Timeout configuration for pod restart job.
+  #
+  # PASS --timeout TO HELM AS WELL. Helm's own default is 5 MINUTES and it wins over
+  # everything here: it abandons the hook at 5m, `helm upgrade` reports
+  # "post-upgrade hooks failed ... context deadline exceeded", and the release goes to
+  # failed while the job is still running and would have succeeded. Measured on a live
+  # upgrade where the rollout took longer than 5m.
+  #
+  #   helm upgrade <rel> <chart> --timeout 15m ...
+  #
+  # Two follow-on effects worth knowing when it does happen:
+  #   - the Job is left behind. Hook delete policies are applied by HELM, not by
+  #     Kubernetes, so once Helm has walked away nothing applies them. It self-cleans
+  #     via ttlSecondsAfterFinished (300s) once it reaches a terminal state, or you can
+  #     delete it by hand.
+  #   - the release is marked failed even though the objects were applied. A plain
+  #     `helm upgrade --reuse-values` afterwards returns it to deployed.
   restartJob:
+    # Restart every pod after install/upgrade so it picks up the external announce
+    # configuration. OFF by default in 1.3.0, because the pods already have that
+    # configuration on their FIRST boot and the restart cannot add anything:
+    #
+    #   1. Every announce value is a render-time constant. nodeHost, nodePorts and
+    #      loadBalancerIPs come from these values into the scripts ConfigMap; the only
+    #      value read at runtime is POD_IP from the downward API, which is present at
+    #      first boot. There is no lookup of a Service, an IP or a port anywhere in
+    #      start-redis.sh or start-sentinel.sh.
+    #   2. Both config files are recreated from that ConfigMap on every boot
+    #      (`cp /config/redis.conf /data/redis.conf`, same for sentinel.conf) and the
+    #      announce lines appended after. So boot 1 and boot 2 produce byte-identical
+    #      announce configuration.
+    #
+    # What it did cost, measured on a fresh 3-pod NodePort install: all three pods were
+    # Running 3/3 at 35s, the job finished at 2m51s, and in between it deleted all three
+    # - one of which was the master, so mastership moved.
+    #
+    # This is specific to THIS chart. Do not copy the default to redis-cluster: there the
+    # same job is load-bearing. That chart gates the announce on nodes.conf existing
+    # (statefulset.yaml) - first boot announces the pod IP so `--cluster create` can form
+    # the cluster pod-to-pod, and the external IP is only written on a LATER boot. The
+    # restart is what produces that later boot.
+    #
+    # On an UPGRADE it is a second rollout on top of Helm's own: enabling external access
+    # changes the scripts ConfigMap, which changes checksum/scripts on the pod template,
+    # which rolls the pods already. The job then rolls them again.
+    #
+    # Set this true to get the 1.2.x behaviour back:
+    #   --set externalAccess.restartJob.enabled=true
+    #
+    # If you do, note that helmHookTimeout is only reachable when `helm` itself is given
+    # at least as long - see the --timeout note above.
+    enabled: false
+
     # Helm hook timeout (total time for the entire restart job)
     # Format: duration string (e.g., "30m", "1800s")
     # Should be: (podReadyTimeout * replicaCount) + buffer
@@ -337,6 +738,7 @@ updateStrategy:
 metrics:
   enabled: false
   image:
+    registry: docker.io
     repository: oliver006/redis_exporter
     tag: v1.79.0
     pullPolicy: IfNotPresent
@@ -369,6 +771,7 @@ metrics:
 sentinelExporter:
   enabled: false
   image:
+    registry: docker.io
     repository: oliver006/redis_exporter
     tag: v1.79.0
     pullPolicy: IfNotPresent

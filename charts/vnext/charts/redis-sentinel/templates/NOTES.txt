@@ -1,0 +1,253 @@
+{{- $gsV := include "redis-sentinel.gracefulShutdownValues" . | fromYaml -}}
+{{- $mode := include "redis-sentinel.persistenceMode" . -}}
+{{- $explicit := eq (include "redis-sentinel.persistence.explicitMode" .) "true" -}}
+{{- $durable := eq (include "redis-sentinel.persistence.durable" .) "true" -}}
+{{- $rdbExtra := eq (include "redis-sentinel.rdbActiveInExtraConfig" .) "true" -}}
+{{- $overrides := include "redis-sentinel.extraConfigOverrides" . -}}
+{{- $limitMB := include "redis-sentinel.memLimitMB" . -}}
+{{- $maxMB := include "redis-sentinel.maxMemoryMB" . -}}
+{{- $sizeMB := include "redis-sentinel.memoryToMB" ((.Values.redis.persistence).size | default "") -}}
+{{- $fullname := include "redis-sentinel.fullname" . -}}
+{{- $ioThreads := include "redis-sentinel.ioThreadsEffective" . -}}
+{{- $ioMode := .Values.redis.ioThreads | toString | trim -}}
+{{- $cores := include "redis-sentinel.cpuLimitCores" . -}}
+{{- $autoWould := include "redis-sentinel.ioThreadsAuto" . -}}
+{{- $shadowed := include "redis-sentinel.performanceShadowed" . -}}
+{{ .Chart.Name }} {{ .Chart.Version }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+  Nodes            {{ .Values.replicaCount }} (1 master + {{ sub (int .Values.replicaCount) 1 }} replica, Sentinel quorum {{ .Values.sentinel.quorum }})
+  Persistence      {{ $mode }}{{ if not $explicit }}  (derived from the deprecated keys){{ end }}
+  Storage          {{ if (.Values.redis.persistence).enabled }}PVC {{ .Values.redis.persistence.size }}{{ else }}emptyDir (ephemeral){{ end }}
+  maxmemory        {{ include "redis-sentinel.effectiveMaxMemory" . }} / {{ include "redis-sentinel.maxMemoryPolicy" . }}
+  Failover         Sentinel, down-after {{ .Values.sentinel.downAfterMilliseconds }}ms{{ if $gsV.enabled }} + handover on planned shutdown{{ end }}
+  I/O threads      {{ if $ioThreads }}{{ $ioThreads }}{{ if eq $ioMode "auto" }}  (auto, from resources.redis.limits.cpu={{ .Values.resources.redis.limits.cpu }}){{ else }}  (pinned via redis.ioThreads){{ end }}{{ else }}1 - off, the chart default{{ if $autoWould }}; redis.ioThreads="auto" would give {{ $autoWould }} here{{ end }}{{ end }}
+
+{{- if not (.Values.externalAccess).enabled }}
+This returned as soon as the objects were created - nothing is running yet. Unlike
+redis-cluster, which blocks on its cluster-init hook, this chart has no post-install
+hook to wait on, so `helm install` cannot report readiness. Either pass --wait
+(mind that readiness is loading-aware in 1.3.0, so size --timeout for your dataset),
+or check directly:
+
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ $fullname }} --timeout=10m
+  kubectl -n {{ .Release.Namespace }} exec {{ $fullname }}-0 -c sentinel -- \
+    redis-cli -p {{ .Values.sentinel.port }} SENTINEL get-master-addr-by-name mymaster
+
+The second command is the real check: a release where the Sentinels never agreed on a
+master is "deployed" as far as Helm is concerned, and returns nothing there.
+{{- end }}
+
+TWO PASSWORDS, and they are different. This is the thing that costs an hour:
+
+  Redis     {{ if .Values.auth.existingSecret }}{{ .Values.auth.existingSecret }}{{ else }}{{ include "redis-sentinel.secretName" . }}{{ end }} / {{ .Values.auth.redis.passwordKey | default "redis-password" }}
+            -> requirepass + masterauth on the Redis instances (port {{ .Values.redis.port }})
+  Sentinel  {{ if .Values.auth.existingSecret }}{{ .Values.auth.existingSecret }}{{ else }}{{ include "redis-sentinel.secretName" . }}{{ end }} / {{ .Values.auth.sentinel.passwordKey | default "sentinel-password" }}
+            -> requirepass on the Sentinels (port {{ .Values.sentinel.port }})
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ if .Values.auth.existingSecret }}{{ .Values.auth.existingSecret }}{{ else }}{{ include "redis-sentinel.secretName" . }}{{ end }}     -o jsonpath='{.data.{{ .Values.auth.redis.passwordKey | default "redis-password" }}}' | base64 -d; echo
+  kubectl -n {{ .Release.Namespace }} get secret {{ if .Values.auth.existingSecret }}{{ .Values.auth.existingSecret }}{{ else }}{{ include "redis-sentinel.secretName" . }}{{ end }}     -o jsonpath='{.data.{{ .Values.auth.sentinel.passwordKey | default "sentinel-password" }}}' | base64 -d; echo
+
+A Sentinel-aware client needs BOTH: the Sentinel password to ask who the master is, and
+the Redis password to then connect to it. Tools that discover through Sentinel ask for
+them in two separate fields, and giving the Sentinel password to both is the usual
+mistake - it authenticates to Sentinel, discovers the master, and then fails on the
+Redis connection with "please check the username or password". RedisInsight's
+Auto-Discover screen shows this as a per-primary-group Password column, initially
+"not assigned"; that column wants the REDIS password.
+
+Leave any username field empty. This chart configures no ACL user, so authentication is
+`requirepass` against the `default` user.
+
+If a tool asks for a Sentinel password and then fails on the discovered database anyway,
+it is forwarding the Sentinel credential to Redis rather than the one you typed. Measured
+with RedisInsight's Auto-Discover: every hop works from a plain pod with the right
+password, and connecting to Redis with the SENTINEL password reproduces the tool's exact
+error (`WRONGPASS invalid username-password pair`). Two ways out:
+
+  - Set both passwords to the same value. Sentinel discovery then works whatever the tool
+    forwards, and failover awareness is kept - at the cost that reaching Sentinel is
+    enough to authenticate to Redis.
+  - Skip discovery and add the master directly, as {{ $fullname }}-0.{{ include "redis-sentinel.headlessServiceName" . }}:{{ .Values.redis.port }}
+    with the Redis password. Nothing is weakened, but after a failover the connection
+    points at a replica and writes return READONLY until you re-point it.
+
+Do NOT point such a tool at the {{ $fullname }} Service for writes: it selects every pod,
+master and replicas alike, so writes land on a replica at random. There is deliberately no
+master-only Service - keeping one accurate would need a controller relabelling pods on
+failover, which is the job Sentinel already does for clients that discover through it.
+
+Clients should discover the master through Sentinel, not by connecting to a pod:
+
+  redis-cli -h {{ $fullname }} -p {{ .Values.sentinel.port }} SENTINEL get-master-addr-by-name mymaster
+
+{{- /* ---------------------------------------------------------------- */}}
+{{- $warnings := list -}}
+
+{{- if not $explicit -}}
+{{- $warnings = append $warnings (printf "redis.persistenceMode is not set, so the mode was DERIVED as %q from redis.persistence.enabled + redis.appendonly.\n  Nothing changed in what this release renders - that is the point - but the durable-safe defaults (maxmemory-policy noeviction, a fork-aware memory ratio, an authoritative persistence block) stay off until the mode is declared:\n    helm upgrade %s <chart> --reuse-values --set redis.persistenceMode=%s" $mode .Release.Name $mode) -}}
+{{- end -}}
+
+{{- if and (eq $mode "diskless") (not $gsV.enabled) -}}
+{{- $warnings = append $warnings "diskless mode with gracefulShutdown.enabled=false is a data-loss trap.\n  A master that restarts faster than sentinel.downAfterMilliseconds is never marked down, so it comes back EMPTY and the replicas full-resync FROM EMPTY - the WHOLE dataset, not one shard's worth. Either enable gracefulShutdown or pick a durable mode." -}}
+{{- end -}}
+
+{{- if and $durable (not (.Values.redis.persistence).enabled) -}}
+{{- $warnings = append $warnings "redis.persistence.enabled is FALSE in a durable mode.\n  /data is an emptyDir, so the AOF/RDB being written survives a container restart but is LOST whenever the pod is rescheduled - and so is the Sentinel config that records who the master is.\n  Either set redis.persistence.enabled=true or use redis.persistenceMode=diskless." -}}
+{{- end -}}
+
+{{- /* Only on an UPGRADE: a fresh install has nothing to resurrect, so on
+     install this is pure noise - and a warning that always fires teaches
+     people to ignore warnings. */ -}}
+{{- if and (eq $mode "diskless") ((.Values.redis.persistence).enabled) -}}
+{{- $warnings = append $warnings "diskless mode with a PVC is NOT ephemeral, and this is measured rather than theoretical.\n  `save \"\"` stops Redis from WRITING snapshots. It does not stop it from READING one, and it does not stop something else from writing one: a replica whose database is NOT empty falls back from repl-diskless-load on-empty-db to STAGING the incoming RDB to /data. Every promotion and demotion is a chance to leave one behind.\n  Observed on a 3-pod diskless release with no mode change of any kind: after scaling to 0 and back to 3, the pod came up with `Done loading RDB, keys loaded: 1` and the key written before the outage was still there. A leftover `temp-*.rdb` from an interrupted sync was on the volume too.\n  So do not rely on diskless+PVC to discard data, and do not rely on a restarted pod coming back empty. If you need ephemeral, use persistence.enabled=false (an emptyDir). If you need the data gone now, delete /data/dump.rdb deliberately - the chart will not remove your files on its own." -}}
+{{- end -}}
+
+{{- if and (eq $mode "diskless") $rdbExtra -}}
+{{- $warnings = append $warnings "This release is in diskless mode but redis.extraConfig ENABLES RDB snapshots.\n  Snapshots are being written that the chart's own defaults assume do not exist. Declare redis.persistenceMode=rdb (or aof-rdb) if they matter, or remove the save lines from extraConfig." -}}
+{{- end -}}
+
+{{- if and $explicit $overrides -}}
+{{- $warnings = append $warnings (printf "redis.extraConfig sets directives the declared mode owns: %s\n  They have been commented out in the rendered redis.conf, each with a note naming the value that replaces them. Move the intent into redis.rdb.* / redis.aof.* / redis.appendfsync, or set redis.extraConfigOverridesPersistence=true to restore the pre-1.3.0 precedence." $overrides) -}}
+{{- end -}}
+
+{{- if and (not $explicit) $overrides -}}
+{{- $warnings = append $warnings (printf "redis.extraConfig sets persistence directives (%s) and, because the mode is only derived, extraConfig still WINS over the chart's persistence block.\n  Deliberate for upgrade safety, but it means redis.conf and the mode can disagree. Declaring redis.persistenceMode makes the chart authoritative." $overrides) -}}
+{{- end -}}
+
+{{- if and (not $limitMB) (not .Values.redis.maxMemory) -}}
+{{- $warnings = append $warnings "maxmemory is UNLIMITED (0): resources.redis.limits.memory is unset or could not be parsed, and redis.maxMemory is empty.\n  Redis will grow until the cgroup OOMKills the pod, which skips preStop - so the mastership handover never runs and writes fail until Sentinel notices.\n  Set resources.redis.limits.memory to a Kubernetes quantity (e.g. 3Gi) or set redis.maxMemory." -}}
+{{- end -}}
+
+{{- if and $durable ((.Values.redis.persistence).enabled) $maxMB $sizeMB -}}
+{{- if lt (int $sizeMB) (mul (int $maxMB) 3) -}}
+{{- $warnings = append $warnings (printf "redis.persistence.size (%s = %dMiB) is under 3x maxmemory (%dMiB).\n  A durable node needs room for the dataset PLUS the AOF, PLUS the temporary file an AOF rewrite writes, PLUS the temporary RDB a replica full-sync stages to disk. ~3x is the working rule.\n  volumeClaimTemplates is IMMUTABLE, so growing this later needs a StatefulSet recreate with --cascade=orphan. Size it now." .Values.redis.persistence.size (int $sizeMB) (int $maxMB)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* maxmemory vs the container limit - the mismatch people actually hit */ -}}
+{{- if and $maxMB $limitMB -}}
+{{- $ratio := include "redis-sentinel.maxMemoryRatio" . -}}
+{{- $derived := 0 -}}
+{{- if $ratio -}}{{- $derived = mulf ($limitMB | float64) ($ratio | float64) | int -}}{{- end -}}
+{{- if gt (int $maxMB) (int $limitMB) -}}
+{{- $warnings = append $warnings (printf "maxmemory (%dMiB) is ABOVE the container memory limit (%dMiB).\n  Redis will never evict, because the cgroup OOMKills the pod first - and an OOMKill skips preStop, so the graceful handover that protects your data never runs.\n  Set redis.maxMemory to at most ~%d%% of the limit, or raise the limit." (int $maxMB) (int $limitMB) 60) -}}
+{{- else if and (gt (int $limitMB) 0) (lt (mul (int $maxMB) 2) (int $limitMB)) -}}
+{{- $warnings = append $warnings (printf "redis.maxMemory is pinned at %s (%dMiB) while the container limit is %dMiB - Redis will use less than half of the memory this pod reserves.\n  This is the mismatch to double-check when you raise a limit: redis.maxMemory WINS over redis.maxMemoryRatio, so raising resources changes nothing on its own. Clearing redis.maxMemory would give %dMiB here (%s x the limit).\n  It can of course be deliberate - a durable mode is often bounded by the PVC (~3x maxmemory) rather than by RAM. If it is, ignore this line." .Values.redis.maxMemory (int $maxMB) (int $limitMB) (int $derived) $ratio) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Mode declared, but a mode-derived default is pinned to something DIFFERENT from
+       what the mode would derive, so the derivation never ran.
+
+       The comparison against the derived value is the whole point. Warning merely because
+       the key is SET fires on every values-example that spells the derived value out, and
+       prints the self-refuting "PINNED so the defaults are NOT in effect:
+       maxMemoryPolicy=noeviction (the mode would derive noeviction)". Seen on the first
+       real install of only-aof.yaml; a check that cries wolf gets switched off.
+
+       The usual way into a genuine mismatch is not a deliberate choice: `helm upgrade
+       --reuse-values` from <=1.2.x carries the OLD chart's defaults as the release's
+       effective values, and they win over 1.3.0's "" (= derive). Measured on a live
+       1.2.2 -> 1.3.0 upgrade - `helm get values` showed a clean USER-SUPPLIED block while
+       `--all` reported maxMemoryRatio: 0.78 and appendfsync: null, neither of them a 1.3.0
+       default. So the operator declares aof-rdb, believes they opted into the fork-aware
+       ratio, and gets the old one. */ -}}
+{{- $ratioSet := .Values.redis.maxMemoryRatio | toString | trim -}}
+{{- $policySet := .Values.redis.maxMemoryPolicy | toString | trim -}}
+{{- $ratioDer := include "redis-sentinel.maxMemoryRatioDerived" . -}}
+{{- $policyDer := include "redis-sentinel.maxMemoryPolicyDerived" . -}}
+{{- $pinned := list -}}
+{{- if and $ratioSet (ne ($ratioSet | float64) ($ratioDer | float64)) -}}
+{{- $pinned = append $pinned (printf "maxMemoryRatio=%s, where the mode derives %s (which leaves room for the BGSAVE / AOF-rewrite fork's copy-on-write)" $ratioSet $ratioDer) -}}
+{{- end -}}
+{{- /* allkeys-lru in a durable mode has its own warning, which explains the
+       consequence properly. Do not say it twice. */ -}}
+{{- if and $policySet (ne $policySet $policyDer) (ne $policySet "allkeys-lru") -}}
+{{- $pinned = append $pinned (printf "maxMemoryPolicy=%s, where the mode derives %s" $policySet $policyDer) -}}
+{{- end -}}
+{{- if and $explicit $durable $pinned -}}
+{{- $warnings = append $warnings (printf "redis.persistenceMode=%s is declared, but the mode's durable-safe defaults are OVERRIDDEN: %s\n  Deliberate? Ignore this.\n  Upgraded with --reuse-values from 1.2.x? Then it is not deliberate: that flag does not merge the new chart's defaults, it carries the OLD chart's - so declaring the mode changed the persistence block but not the memory defaults. `helm get values %s` will show a clean USER-SUPPLIED block while the values actually rendered still hold the old numbers.\n  Fix with either:\n    helm upgrade %s <chart> --reset-then-reuse-values     # Helm >= 3.14, resets to THIS chart's defaults then re-applies your own values\n    helm upgrade %s <chart> -f your-values.yaml           # a plain upgrade, re-passing what you actually set" $mode (join "; " $pinned) .Release.Name .Release.Name .Release.Name) -}}
+{{- end -}}
+
+{{- if and $durable (eq (include "redis-sentinel.maxMemoryPolicy" .) "allkeys-lru") -}}
+{{- $warnings = append $warnings "maxmemory-policy is allkeys-lru on a release that persists data.\n  When the limit is reached Redis will DELETE committed keys, and the DELs go into the AOF too - so the data is not recoverable from disk either. Set redis.maxMemoryPolicy=noeviction (declaring redis.persistenceMode also switches this default)." -}}
+{{- end -}}
+
+{{- $ftEff := int (include "redis-sentinel.gracefulShutdown.failoverTimeoutEffective" .) -}}
+{{- if and $gsV.enabled (ne $ftEff (int $gsV.failoverTimeout)) -}}
+{{- $warnings = append $warnings (printf "gracefulShutdown.failoverTimeout=%v was CLAMPED to %ds so it fits terminationGracePeriodSeconds=%v.\n  Budget: failoverTimeout + waitTimeoutSeconds(%v) + ~8s overhead + redis shutdown-timeout(%v) + the blocking RDB save SIGTERM triggers. At the current grace period the handover gets %ds, which may not be enough for a replica to catch up. Raise terminationGracePeriodSeconds." $gsV.failoverTimeout $ftEff .Values.terminationGracePeriodSeconds ($gsV.waitTimeoutSeconds) (.Values.redis.shutdownTimeout | default 10) $ftEff) -}}
+{{- end -}}
+
+{{- $needQuorum := add (div (int .Values.replicaCount) 2) 1 -}}
+{{- if ne (int .Values.sentinel.quorum) $needQuorum -}}
+{{- $warnings = append $warnings (printf "sentinel.quorum is %v for %v nodes; the usual value is (replicaCount / 2) + 1 = %d.\n  Too low risks a split-brain failover decision; too high means no failover can ever be agreed." .Values.sentinel.quorum .Values.replicaCount $needQuorum) -}}
+{{- end -}}
+
+
+
+{{- /* Tuning set in two places at once. The performance block renders BEFORE
+     extraConfig so existing extraConfig tuning stays authoritative across this
+     upgrade; the cost is that a value set here silently loses. */ -}}
+{{- if $shadowed -}}
+{{- $warnings = append $warnings (printf "redis.extraConfig sets tuning directives that the performance values ALSO set, and extraConfig WINS: %s\n  The performance block is rendered before extraConfig deliberately - that is what keeps your existing extraConfig authoritative across this upgrade - so the value you set does nothing here, and the rendered redis.conf just carries the directive twice with different values. Persistence directives get commented out for you; tuning does not, because the mode does not own it.\n  Remove them from redis.extraConfig, or drop the matching redis.network.* / redis.replication.replBacklogSize / redis.ioThreads / redis.lazyFreeing value." $shadowed) -}}
+{{- end -}}
+
+{{- if and (eq $ioMode "auto") (not $cores) -}}
+{{- $warnings = append $warnings "redis.ioThreads is \"auto\" but resources.redis.limits.cpu is unset or unparseable, so io-threads was NOT emitted - Redis keeps its default of 1.\n  This fails closed on purpose. In Kubernetes the CPU limit is a CFS quota, not pinned cores, so threads beyond what the quota can feed do not idle politely: they throttle the whole cgroup at the end of every period, which surfaces as latency spikes that look like Redis stalling rather than as a findable error.\n  Set resources.redis.limits.cpu to a Kubernetes CPU quantity (e.g. 4 or 4000m), or pin redis.ioThreads to a number." -}}
+{{- end -}}
+
+{{- if and $ioThreads (ne $ioMode "auto") $cores -}}
+{{- $rec := int ($autoWould | default "1") -}}
+{{- if gt (int $ioThreads) $rec -}}
+{{- $warnings = append $warnings (printf "redis.ioThreads is pinned at %s against a CPU limit of %v (%s whole cores). redis.ioThreads=\"auto\" would pick %d.\n  Command execution stays on the single main thread, which needs a core of its own, and so does the rest of the pod - including the sentinel container, which votes on failovers and must not be starved. Over-threading a CFS quota throttles the whole cgroup rather than just running the extra threads slowly.\n  A pinned number is also what silently goes stale: change the CPU limit and nothing here follows. Prefer redis.ioThreads=auto." $ioThreads .Values.resources.redis.limits.cpu $cores (int $rec)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* NodePort external access. Getting this wrong is invisible until a client
+     outside the cluster times out, so it is reported at install time. */ -}}
+{{- if (.Values.externalAccess).enabled -}}
+{{- $svc := .Values.externalAccess.service -}}
+{{- $npR := ($svc.nodePorts).redis | default list -}}
+{{- $npS := ($svc.nodePorts).sentinel | default list -}}
+{{- $nh := $svc.nodeHost | default "" -}}
+{{- if eq $svc.type "NodePort" -}}
+{{- if or (not $nh) (eq (len $npR) 0) (eq (len $npS) 0) -}}
+{{- $warnings = append $warnings (printf "externalAccess is NodePort, but Sentinel discovery will only work INSIDE the cluster.\n  The pods announce their in-cluster FQDN, because nodeHost is %q and nodePorts.redis/.sentinel have %d/%d entries. An external client can reach a pod directly, but the address Sentinel hands back is not routable from outside, so a Sentinel-aware client fails on the second hop.\n  Unlike LoadBalancer, NodePort reaches every pod at the SAME address on a DIFFERENT port, so both of these are needed:\n    --set externalAccess.service.nodeHost=<a node IP, or a VIP in front of them>\n    --set externalAccess.service.nodePorts.redis={30001,30002,30003}\n    --set externalAccess.service.nodePorts.sentinel={31001,31002,31003}\n  Leaving it as-is is fine when your clients are in-cluster: nothing is broken, it is just not discoverable from outside." $nh (len $npR) (len $npS)) -}}
+{{- end -}}
+{{- if and (gt (len $npR) 0) (lt (len $npR) (int .Values.replicaCount)) -}}
+{{- $warnings = append $warnings (printf "externalAccess.service.nodePorts.redis has %d entries for %v pods.\n  Pods from index %d up announce nothing, so Sentinel keeps their in-cluster address and no external client can reach them - including after a failover promotes one of them. One entry per pod, in ordinal order." (len $npR) .Values.replicaCount (len $npR)) -}}
+{{- end -}}
+{{- if and (gt (len $npS) 0) (lt (len $npS) (int .Values.replicaCount)) -}}
+{{- $warnings = append $warnings (printf "externalAccess.service.nodePorts.sentinel has %d entries for %v pods.\n  The Sentinels from index %d up are not externally addressable, so a client listing only the reachable ones sees fewer Sentinels than exist and may misjudge quorum." (len $npS) .Values.replicaCount (len $npS)) -}}
+{{- end -}}
+{{- if and $nh (eq $svc.externalTrafficPolicy "Local") -}}
+{{- $warnings = append $warnings "externalAccess.service.nodeHost is set together with externalTrafficPolicy: Local.\n  Local delivers traffic arriving at a node ONLY to pods on that node, so one shared address cannot reach all of them - the others look permanently down from outside. Use externalTrafficPolicy: Cluster with nodeHost, or LoadBalancer if you need Local to preserve the source IP." -}}
+{{- end -}}
+{{- end -}}
+{{- if (.Values.externalAccess.restartJob).enabled -}}
+{{- $warnings = append $warnings (printf "externalAccess.restartJob.enabled is true, so all %v pods will be DELETED after this release settles - and it buys nothing in this chart.\n  Every announce value is a render-time constant, and both /data/redis.conf and /data/sentinel.conf are recreated from the ConfigMap on every boot, so the pods already announce correctly on their FIRST boot. Measured on a fresh 3-pod install: pods Running 3/3 at 35s, job finished at 2m51s, three restarts in between - one of them the master, so mastership moved.\n  On an upgrade it is a second rollout on top of Helm's own, because the changed scripts ConfigMap already rolls the pods.\n  Remove the setting (default false), or if you keep it, give helm at least as long as restartJob.helmHookTimeout (%s) or the hook is killed by helm's own --timeout." .Values.replicaCount .Values.externalAccess.restartJob.helmHookTimeout) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if and .Values.redis.ioThreadsDoReads (not $ioThreads) -}}
+{{- $warnings = append $warnings "redis.ioThreadsDoReads is true but redis.ioThreads resolves to no I/O threads, so io-threads-do-reads was not emitted and the setting does nothing.\n  Set redis.ioThreads to \"auto\" or a number above 1." -}}
+{{- end -}}
+
+{{- if $warnings }}
+
+{{ len $warnings }} thing(s) worth reading:
+{{ range $i, $w := $warnings }}
+{{ add1 $i }}. {{ $w }}
+{{ end }}
+{{- end }}
+
+One thing about readiness that is worth knowing rather than fixing: a pod counts as
+Ready only when ALL its containers are, and the {{ $fullname }} Service publishes
+the redis AND the sentinel port off the same endpoints. So a redis container that is
+still loading its dataset removes that pod's SENTINEL endpoint too. During a rolling
+update only one pod loads at a time, so discovery keeps working; after a full outage
+every pod is NotReady at once and clients see "no sentinels reachable" rather than
+-LOADING. Point Sentinel-discovery clients at the headless service
+{{ $fullname }}-headless, which carries publishNotReadyAddresses.
+
+Docs: docs/redis-sentinel/persistence.md (modes, sizing, backup/restore)

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-runtime
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+data:
+  runtimeconfig.json: |
+{{ .Values.global.runtimeConfigJson | indent 4 }}

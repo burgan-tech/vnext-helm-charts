@@ -1,6 +1,32 @@
 # Patterns to ignore when building packages.
-*.md
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+.DS_Store
+# Common VCS dirs
 .git/
 .gitignore
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+# Editor / backup leftovers
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Various IDEs
+.project
+.idea/
+*.tmproj
+.vscode/
+# Packaged charts
+*.tgz
+# Repo-only material. These are reference manifests, operator scripts and
+# per-environment values files: they live in git and are linked from docs/,
+# nothing in templates/ reads them. Keeping them out of the artifact also means
+# a stray local values file can never be published inside a chart.
 examples/
-
+scripts/
+values-examples/

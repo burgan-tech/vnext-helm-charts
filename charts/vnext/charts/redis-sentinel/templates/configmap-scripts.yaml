@@ -20,11 +20,42 @@ data:
     cp /config/redis.conf /data/redis.conf
     
     {{- if .Values.externalAccess.enabled }}
-    # External access: announce external IP if configured
-    {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
-    {{- if gt (len $loadBalancerIPs) 0 }}
+    {{- $lbIPs := .Values.externalAccess.service.loadBalancerIPs }}
+    {{- $npRedis := ((.Values.externalAccess.service.nodePorts).redis) | default list }}
+    {{- $nodeHost := (.Values.externalAccess.service.nodeHost) | default "" }}
+    {{- $isNodePort := eq .Values.externalAccess.service.type "NodePort" }}
+    {{- if and $isNodePort $nodeHost (gt (len $npRedis) 0) }}
+    # External access, NodePort: announce <nodeHost>:<this pod's nodePort>.
+    #
+    # The per-pod port is the whole point. LoadBalancer gives every pod its own
+    # address on the same port, so one announced port is right there; NodePort
+    # gives every pod the SAME address on a different port, so announcing one
+    # shared port sends clients somewhere nothing is listening. Sentinel learns
+    # replicas from these values, and a promoted replica becomes the master
+    # address it hands out - so getting them right here is what makes discovery
+    # work from outside at all.
     case $POD_INDEX in
-    {{- range $i, $ip := $loadBalancerIPs }}
+    {{- range $i, $np := $npRedis }}
+      {{ $i }})
+        ANNOUNCE_IP="{{ $nodeHost }}"
+        ANNOUNCE_PORT="{{ $np }}"
+        ;;
+    {{- end }}
+      *)
+        echo "Warning: externalAccess.service.nodePorts.redis has no entry for pod index $POD_INDEX"
+        ANNOUNCE_IP=""
+        ;;
+    esac
+    if [ -n "$ANNOUNCE_IP" ]; then
+      echo "replica-announce-ip $ANNOUNCE_IP" >> /data/redis.conf
+      echo "replica-announce-port $ANNOUNCE_PORT" >> /data/redis.conf
+      echo "External access (NodePort): announcing $ANNOUNCE_IP:$ANNOUNCE_PORT for pod $POD_INDEX"
+    fi
+    {{- else if gt (len $lbIPs) 0 }}
+    # External access, LoadBalancer: each pod has its own address and the
+    # service port is the reachable one, so a single announced port is correct.
+    case $POD_INDEX in
+    {{- range $i, $ip := $lbIPs }}
       {{ $i }})
         ANNOUNCE_IP="{{ $ip }}"
         ;;
@@ -46,27 +77,155 @@ data:
       echo "masterauth $REDIS_PASSWORD" >> /data/redis.conf
     fi
     
-    # Determine if this is initial master (pod-0)
-    # Sentinel will handle failover later
-    if [ "$POD_INDEX" = "0" ]; then
-      echo "Starting as initial master (pod-0)"
+    # ============================================================
+    # WHO IS THE MASTER?
+    # ============================================================
+    # This used to be "pod-0 is the master, everyone else is a replica of pod-0",
+    # unconditionally, on every start. That is only true on a fresh install.
+    #
+    # After a failover the master is some other ordinal - and a restarted pod-0 came
+    # back as a SECOND MASTER holding an old but entirely plausible dataset. It
+    # accepts writes for as long as it takes Sentinel to notice and demote it, and
+    # those writes are then discarded by the full resync. Silent data loss on nothing
+    # more than a pod restart of the wrong ordinal.
+    #
+    # start-sentinel.sh already contains exactly the discovery this needs, so ask any
+    # reachable Sentinel who the master is - for EVERY ordinal, not just non-zero
+    # ones. When no Sentinel answers we are a fresh install, and the pod-0 rule below
+    # is the correct answer as well as the historical one.
+    {{- include "redis-sentinel.scliAtFunc" . | nindent 4 }}
+    {{- include "redis-sentinel.rcliAtFunc" . | nindent 4 }}
+
+    MY_FQDN="{{ include "redis-sentinel.fullname" . }}-${POD_INDEX}.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+    MY_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+    POD0_FQDN="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+
+    MASTER_HOST=""
+    MASTER_PORT=""
+    for i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
+      OTHER="{{ include "redis-sentinel.fullname" . }}-${i}.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      ADDR=$(scli_at "$OTHER" SENTINEL get-master-addr-by-name mymaster 2>/dev/null | tr '\r\n' '  ')
+      H=$(echo "$ADDR" | awk '{print $1}')
+      P=$(echo "$ADDR" | awk '{print $2}')
+      if [ -n "$H" ] && [ -n "$P" ]; then
+        MASTER_HOST="$H"
+        MASTER_PORT="$P"
+        echo "Sentinel on pod-$i reports the master is $MASTER_HOST:$MASTER_PORT"
+        break
+      fi
+    done
+
+    # ------------------------------------------------------------------
+    # Sentinel says WHO the master is. It does not get to say how we reach it.
+    # ------------------------------------------------------------------
+    # Replication must use the in-cluster FQDN, always, and the address Sentinel
+    # reports is not one:
+    #
+    #   a pod IP    Sentinel learns replicas from the master's INFO replication,
+    #               which lists IPs, so after a failover it reports the new master
+    #               by IP. Pinning `replicaof <pod IP>` survives exactly until that
+    #               pod is recreated - measured on a live rolling restart, where a
+    #               replica spent minutes on "Timeout connecting to the MASTER
+    #               10.194.74.56:6379" for a pod that no longer existed, could not
+    #               recover on its own because replicaof holds a literal address,
+    #               and stayed NotReady long enough to fail the external-access
+    #               restart job and with it the whole helm upgrade.
+    #
+    #   an external LoadBalancer IP or nodeHost:nodePort, once externalAccess is
+    #               announcing. Replication would then leave the cluster and come
+    #               back in through the router, which works and is absurd: it
+    #               depends on an ingress path for traffic between two pods in the
+    #               same namespace.
+    #
+    # A pod FQDN survives every IP change and never leaves the cluster, so map
+    # whatever Sentinel said onto one. Each branch below uses something the chart
+    # knows at render time; the probe is the fallback when none of them match.
+    master_fqdn_of() {
+      _mf_ord=""
+      {{- $npR := ((.Values.externalAccess.service).nodePorts).redis | default list }}
+      {{- $lbI := (.Values.externalAccess.service).loadBalancerIPs | default list }}
+      {{- if .Values.externalAccess.enabled }}
+      {{- range $i, $np := $npR }}
+      [ -z "$_mf_ord" ] && [ "$2" = "{{ $np }}" ] && _mf_ord={{ $i }}
+      {{- end }}
+      {{- range $i, $ip := $lbI }}
+      [ -z "$_mf_ord" ] && [ "$1" = "{{ $ip }}" ] && _mf_ord={{ $i }}
+      {{- end }}
+      {{- end }}
+
+      # Already one of ours: the first DNS label ends with the ordinal.
+      if [ -z "$_mf_ord" ]; then
+        case "${1%%.*}" in
+          {{ include "redis-sentinel.fullname" . }}-*)
+            _mf_ord="${1%%.*}"; _mf_ord="${_mf_ord##*-}" ;;
+        esac
+      fi
+
+      # Nothing matched - most likely a bare pod IP. Ask each pod directly which one
+      # is the master. This is also the branch that saves us when the address
+      # Sentinel reported is DEAD: probing finds the pod that is actually serving.
+      if [ -z "$_mf_ord" ]; then
+        for _mf_i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
+          _mf_f="{{ include "redis-sentinel.fullname" . }}-${_mf_i}.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+          _mf_r=$(rcli_at "$_mf_f" {{ .Values.redis.port }} INFO replication 2>/dev/null \
+                    | grep '^role:' | cut -d: -f2 | tr -d '\r\n ')
+          if [ "$_mf_r" = "master" ]; then
+            _mf_ord=$_mf_i
+            break
+          fi
+        done
+      fi
+
+      case "$_mf_ord" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      printf '%s-%s.%s.%s.svc.cluster.local' \
+        "{{ include "redis-sentinel.fullname" . }}" "$_mf_ord" \
+        "{{ include "redis-sentinel.headlessServiceName" . }}" "{{ .Release.Namespace }}"
+    }
+
+    if [ -n "$MASTER_HOST" ]; then
+      MAPPED=$(master_fqdn_of "$MASTER_HOST" "$MASTER_PORT")
+      if [ -n "$MAPPED" ]; then
+        if [ "$MAPPED" != "$MASTER_HOST" ] || [ "$MASTER_PORT" != "{{ .Values.redis.port }}" ]; then
+          echo "Replicating from the in-cluster address instead: $MAPPED:{{ .Values.redis.port }}"
+        fi
+        MASTER_HOST="$MAPPED"
+        MASTER_PORT={{ .Values.redis.port }}
+      else
+        # Never end up worse than before: if the address cannot be mapped, use it as
+        # given. That is today's behaviour, with a line saying why it is fragile.
+        echo "WARNING: could not map $MASTER_HOST:$MASTER_PORT to a pod - replicating from it as-is."
+        echo "  If that address is a pod IP it will break when the pod is recreated."
+      fi
+    fi
+
+    if [ -z "$MASTER_HOST" ]; then
+      echo "No Sentinel answered - treating this as a fresh install (pod-0 is master)"
+      if [ "$POD_INDEX" = "0" ]; then
+        MASTER_HOST="$MY_IP"
+      else
+        MASTER_HOST="$POD0_FQDN"
+      fi
+      MASTER_PORT={{ .Values.redis.port }}
+    fi
+
+    # Sentinel reports the master by the address it monitors, normally an IP, so
+    # compare against every identity this pod can legitimately be known by.
+    AM_I_MASTER=no
+    for mine in "$MY_IP" "$MY_FQDN" "${ANNOUNCE_IP:-}"; do
+      [ -n "$mine" ] || continue
+      [ "$MASTER_HOST" = "$mine" ] && AM_I_MASTER=yes
+    done
+
+    if [ "$AM_I_MASTER" = "yes" ]; then
+      echo "Starting as master (pod-$POD_INDEX is the current master)"
     else
-      echo "Starting as replica (pod-$POD_INDEX)"
-      # Initial master is pod-0 - use internal DNS for replication
-      MASTER_HOST="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
-      echo "replicaof $MASTER_HOST {{ .Values.redis.port }}" >> /data/redis.conf
-      
-      # Wait for master to be ready
+      echo "Starting as replica of $MASTER_HOST:$MASTER_PORT (pod-$POD_INDEX)"
+      echo "replicaof $MASTER_HOST $MASTER_PORT" >> /data/redis.conf
+
       echo "Waiting for master to be ready..."
-      {{- if .Values.tls.enabled }}
-      {{- if .Values.tls.redis.authClients }}
-      until redis-cli -h $MASTER_HOST -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
-      {{- else }}
-      until redis-cli -h $MASTER_HOST -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null; do
-      {{- end }}
-      {{- else }}
-      until redis-cli -h $MASTER_HOST -p {{ .Values.redis.port }} -a "$REDIS_PASSWORD" ping 2>/dev/null; do
-      {{- end }}
+      until rcli_at "$MASTER_HOST" "$MASTER_PORT" ping > /dev/null 2>&1; do
         echo "Master not ready, waiting..."
         sleep 2
       done
@@ -102,9 +261,31 @@ data:
     fi
     
     {{- if .Values.externalAccess.enabled }}
-    # External access: announce external IP if configured
     {{- $loadBalancerIPs := .Values.externalAccess.service.loadBalancerIPs }}
-    {{- if gt (len $loadBalancerIPs) 0 }}
+    {{- $npSentinel := ((.Values.externalAccess.service.nodePorts).sentinel) | default list }}
+    {{- $nodeHostS := (.Values.externalAccess.service.nodeHost) | default "" }}
+    {{- $isNodePortS := eq .Values.externalAccess.service.type "NodePort" }}
+    {{- if and $isNodePortS $nodeHostS (gt (len $npSentinel) 0) }}
+    # External access, NodePort: this Sentinel announces its own nodePort, so the
+    # other Sentinels and any external client address it correctly.
+    case $POD_INDEX in
+    {{- range $i, $np := $npSentinel }}
+      {{ $i }})
+        SENTINEL_ANNOUNCE_IP="{{ $nodeHostS }}"
+        SENTINEL_ANNOUNCE_PORT="{{ $np }}"
+        ;;
+    {{- end }}
+      *)
+        echo "Warning: externalAccess.service.nodePorts.sentinel has no entry for pod index $POD_INDEX"
+        SENTINEL_ANNOUNCE_IP=""
+        ;;
+    esac
+    if [ -n "$SENTINEL_ANNOUNCE_IP" ]; then
+      echo "sentinel announce-ip $SENTINEL_ANNOUNCE_IP" >> /data/sentinel.conf
+      echo "sentinel announce-port $SENTINEL_ANNOUNCE_PORT" >> /data/sentinel.conf
+      echo "External access (NodePort): Sentinel announcing $SENTINEL_ANNOUNCE_IP:$SENTINEL_ANNOUNCE_PORT"
+    fi
+    {{- else if gt (len $loadBalancerIPs) 0 }}
     case $POD_INDEX in
     {{- range $i, $ip := $loadBalancerIPs }}
       {{ $i }})
@@ -157,45 +338,83 @@ data:
     MASTER_HOST="{{ include "redis-sentinel.fullname" . }}-0.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
     {{- end }}
     
-    # Try to get master from existing Sentinel (if any other Sentinel is running)
-    if [ "$POD_INDEX" != "0" ]; then
-      echo "Checking for existing Sentinel..."
-      for i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
-        if [ "$i" != "$POD_INDEX" ]; then
-          OTHER_HOST="{{ include "redis-sentinel.fullname" . }}-$i.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
-          # Query Sentinel with authentication if password is set
-          {{- if .Values.tls.enabled }}
-          {{- if .Values.tls.sentinel.authClients }}
-          if [ -n "$SENTINEL_PASSWORD" ]; then
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          else
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          fi
-          {{- else }}
-          if [ -n "$SENTINEL_PASSWORD" ]; then
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          else
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          fi
-          {{- end }}
-          {{- else }}
-          if [ -n "$SENTINEL_PASSWORD" ]; then
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          else
-            SENTINEL_MASTER=$(redis-cli -h $OTHER_HOST -p {{ .Values.sentinel.port }} sentinel get-master-addr-by-name mymaster 2>/dev/null | head -1 || echo "")
-          fi
-          {{- end }}
-          if [ -n "$SENTINEL_MASTER" ]; then
-            MASTER_HOST=$SENTINEL_MASTER
-            echo "Found master from Sentinel: $MASTER_HOST"
-            break
-          fi
-        fi
-      done
-    fi
-    
+    # Ask the other Sentinels who the master is - EVERY ordinal, including pod-0.
+    #
+    # Two defects lived here, both already fixed in start-redis.sh, so this had drifted
+    # into being the one place that still got it wrong:
+    #
+    #   `| head -1` kept only the HOST and threw the PORT away. Over NodePort the host is
+    #   nodeHost - identical for every pod - so the port is the ONLY thing saying which
+    #   pod is master. Discarding it made the monitor line fall back to pod-0's port. On a
+    #   live test that was right by luck, because pod-0 happened to be the master; with
+    #   the master on pod-1 or pod-2 a restarting Sentinel would have monitored a REPLICA
+    #   as the master.
+    #
+    #   pod-0 was excluded from asking at all, so a pod-0 restarting into a cluster whose
+    #   master is pod-2 monitored itself. start-redis.sh dropped that exclusion for
+    #   exactly this reason and this script did not follow.
+    #
+    # Six near-identical redis-cli invocations (TLS on/off x authClients on/off x password
+    # or not) are what let both rot here while the sibling script was corrected. scli_at
+    # is the helper start-redis.sh already uses, so the two discover identically now.
+    {{- include "redis-sentinel.scliAtFunc" . | nindent 4 }}
+    MASTER_PORT=""
+    echo "Asking the other Sentinels who the master is..."
+    for i in $(seq 0 $(({{ .Values.replicaCount }} - 1))); do
+      [ "$i" = "$POD_INDEX" ] && continue
+      OTHER_HOST="{{ include "redis-sentinel.fullname" . }}-$i.{{ include "redis-sentinel.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      ADDR=$(scli_at "$OTHER_HOST" SENTINEL get-master-addr-by-name mymaster 2>/dev/null | tr '\r\n' '  ')
+      SM_HOST=$(echo "$ADDR" | awk '{print $1}')
+      SM_PORT=$(echo "$ADDR" | awk '{print $2}')
+      if [ -n "$SM_HOST" ] && [ -n "$SM_PORT" ]; then
+        MASTER_HOST="$SM_HOST"
+        MASTER_PORT="$SM_PORT"
+        echo "Sentinel on pod-$i reports the master is $MASTER_HOST:$MASTER_PORT"
+        break
+      fi
+    done
+
     # Configure Sentinel to monitor the master
-    {{- if .Values.externalAccess.enabled }}
+    {{- $npR := ((.Values.externalAccess.service.nodePorts).redis) | default list }}
+    {{- $nh := (.Values.externalAccess.service.nodeHost) | default "" }}
+    {{- if and .Values.externalAccess.enabled (eq .Values.externalAccess.service.type "NodePort") $nh (gt (len $npR) 0) }}
+    # External access, NodePort: monitor the master at its EXTERNAL address.
+    #
+    # MASTER_HOST/MASTER_PORT come from the discovery above when a Sentinel
+    # answered, and those values are already external - a peer announced them.
+    # On a fresh install nobody answered, MASTER_HOST fell back to pod-0, and the
+    # external address of pod-0 is nodeHost + nodePorts.redis[0]. Keeping the
+    # in-cluster address here would leave discovery internal-only until the first
+    # failover, which is the trap this whole block exists to avoid.
+    if [ -z "$MASTER_PORT" ]; then
+      # Nobody answered: this is a fresh install and pod-0 is the master.
+      MASTER_HOST="{{ $nh }}"
+      MASTER_PORT="{{ index $npR 0 }}"
+      echo "No Sentinel answered - fresh install, monitoring pod-0 at $MASTER_HOST:$MASTER_PORT"
+    elif [ "$MASTER_PORT" = "{{ .Values.redis.port }}" ]; then
+      # A peer reported an IN-CLUSTER address, which happens while its own announce has
+      # not taken effect yet. Translate that pod's ORDINAL to its external port - do NOT
+      # assume pod-0. Assuming it is how a Sentinel ends up monitoring a replica: over
+      # NodePort the host is the same for every pod, so only the port distinguishes them.
+      _mo="${MASTER_HOST%%.*}"; _mo="${_mo##*-}"
+      _mp=""
+      case "$_mo" in
+      {{- range $i, $np := $npR }}
+        {{ $i }}) _mp="{{ $np }}" ;;
+      {{- end }}
+      esac
+      if [ -n "$_mp" ]; then
+        echo "Peer reported the in-cluster address $MASTER_HOST:$MASTER_PORT (pod-$_mo)"
+        MASTER_HOST="{{ $nh }}"
+        MASTER_PORT="$_mp"
+        echo "  monitoring it at its external address $MASTER_HOST:$MASTER_PORT instead"
+      else
+        echo "WARNING: could not map $MASTER_HOST to an ordinal - monitoring it as given."
+        echo "  External clients will get an address they cannot route to."
+      fi
+    fi
+    echo "sentinel monitor mymaster $MASTER_HOST $MASTER_PORT {{ .Values.sentinel.quorum }}" >> /data/sentinel.conf
+    {{- else if .Values.externalAccess.enabled }}
     # External access: use external port
     echo "sentinel monitor mymaster $MASTER_HOST {{ .Values.externalAccess.service.redisPort }} {{ .Values.sentinel.quorum }}" >> /data/sentinel.conf
     {{- else }}
@@ -205,49 +424,101 @@ data:
     echo "Starting Redis Sentinel..."
     exec redis-sentinel /data/sentinel.conf
   
+  # LIVENESS. Deliberately PING only, in every mode.
+  #
+  # Redis answers PING while it replays an AOF/RDB from disk, and that is what makes
+  # a PING-only liveness probe SAFE: a loading-aware liveness probe would restart a
+  # pod that is legitimately loading a large dataset, and the restart starts the load
+  # from scratch - an unbreakable crash loop exactly when the dataset is largest.
+  # Readiness is where loading is caught. Do not "improve" this.
   health-check-redis.sh: |
     #!/bin/sh
-    set -e
-    
-    # REDIS_PASSWORD is injected from environment (Secret)
-    
-    # Check Redis is responding
-    {{- if .Values.tls.enabled }}
-    {{- if .Values.tls.redis.authClients }}
-    redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
-    {{- else }}
-    redis-cli -h 127.0.0.1 -p {{ .Values.tls.redis.port | default .Values.redis.port }} -a "$REDIS_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
-    {{- end }}
-    {{- else }}
-    redis-cli -h 127.0.0.1 -p {{ .Values.redis.port }} -a "$REDIS_PASSWORD" ping 2>/dev/null
-    {{- end }}
-  
-  health-check-sentinel.sh: |
+    # No `set -e`: this script's exit code IS the probe result, so an unexpected
+    # non-zero from anything other than the check itself must not be reported as
+    # "unhealthy".
+    {{- include "redis-sentinel.rcliFunc" . | nindent 4 }}
+    rcli ping
+
+  # READINESS. PING, then the dataset must be loaded, then - for a replica - the
+  # link to its master must be up UNLESS the master itself is unreachable.
+  readiness-check-redis.sh: |
     #!/bin/sh
-    set -e
-    
-    # SENTINEL_PASSWORD is injected from environment (Secret)
-    
-    # Check Sentinel is responding
-    {{- if .Values.tls.enabled }}
-    {{- if .Values.tls.sentinel.authClients }}
-    if [ -n "$SENTINEL_PASSWORD" ]; then
-      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
-    else
-      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cert /etc/redis/tls/tls.crt --key /etc/redis/tls/tls.key --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
+    {{- include "redis-sentinel.rcliFunc" . | nindent 4 }}
+    {{- include "redis-sentinel.rcliAtFunc" . | nindent 4 }}
+    {{- include "redis-sentinel.scliFunc" . | nindent 4 }}
+
+    rcli ping > /dev/null 2>&1 || exit 1
+    INFO=$(rcli INFO 2>/dev/null)
+    if [ -z "$INFO" ]; then
+      echo "INFO returned nothing - not ready"
+      exit 1
     fi
-    {{- else }}
-    if [ -n "$SENTINEL_PASSWORD" ]; then
-      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
-    else
-      redis-cli -h 127.0.0.1 -p {{ .Values.tls.sentinel.port | default .Values.sentinel.port }} --tls --cacert /etc/redis/tls/ca.crt ping 2>/dev/null
-    fi
+    {{- if .Values.readinessRequiresLoaded }}
+    {{- include "redis-sentinel.probe.loadedGate" . | nindent 4 }}
     {{- end }}
-    {{- else }}
-    if [ -n "$SENTINEL_PASSWORD" ]; then
-      redis-cli -h 127.0.0.1 -p {{ .Values.sentinel.port }} -a "$SENTINEL_PASSWORD" ping 2>/dev/null
-    else
-      redis-cli -h 127.0.0.1 -p {{ .Values.sentinel.port }} ping 2>/dev/null
+    {{- if .Values.readinessRequiresReplicationLink }}
+    # A replica with a dead master link holds stale data and is not a valid failover
+    # target, so during a rolling update the update must WAIT for it rather than move
+    # on to the next pod.
+    #
+    # But redis-cluster's version of this check cannot be ported verbatim. There, a
+    # replica with a dead link holds nothing and clients reach other shards. Here the
+    # replica may be the LAST COPY of the data, and it is the only thing still able
+    # to serve reads. Worse: when the master dies, EVERY replica reports link down at
+    # once, so the naive check empties the Service for both the redis AND the sentinel
+    # port - clients then cannot even reach Sentinel to learn the new master, for the
+    # whole down-after-milliseconds + failover window. That is strictly worse than
+    # doing nothing.
+    #
+    # So the link only counts against us when the master is actually REACHABLE, i.e.
+    # when this pod is the problem:
+    #
+    #   role != slave                    -> Ready
+    #   link up                          -> Ready
+    #   link down, master reachable      -> NOT ready   (rollout waits for us)
+    #   link down, master unreachable    -> Ready       (serve stale, replica-serve-stale-data)
+    #
+    # A Sentinel that does not answer is treated as "master unreachable", so the
+    # probe fails OPEN rather than emptying the service.
+    ROLE=$(echo "$INFO" | grep '^role:' | cut -d: -f2 | tr -d '\r\n ')
+    if [ "$ROLE" = "slave" ]; then
+      LINK=$(echo "$INFO" | grep '^master_link_status:' | cut -d: -f2 | tr -d '\r\n ')
+      if [ "$LINK" != "up" ]; then
+        MADDR=$(scli SENTINEL get-master-addr-by-name mymaster 2>/dev/null | tr '\r\n' '  ')
+        MHOST=$(echo "$MADDR" | awk '{print $1}')
+        MPORT=$(echo "$MADDR" | awk '{print $2}')
+        if [ -n "$MHOST" ] && [ -n "$MPORT" ] && rcli_at "$MHOST" "$MPORT" ping > /dev/null 2>&1; then
+          echo "replica link is '$LINK' while master $MHOST:$MPORT IS reachable - not ready"
+          exit 1
+        fi
+        echo "replica link is '$LINK' but the master is not reachable either - staying Ready to serve stale reads"
+      fi
     fi
     {{- end }}
 
+  # STARTUP (optional, off by default - see probes.startup.enabled). PING plus the
+  # loading gate, and deliberately WITHOUT the replication-link check: on a fresh
+  # install no link exists yet, so including it would kill every replica once
+  # failureThreshold ran out.
+  startup-check-redis.sh: |
+    #!/bin/sh
+    {{- include "redis-sentinel.rcliFunc" . | nindent 4 }}
+    rcli ping > /dev/null 2>&1 || exit 1
+    INFO=$(rcli INFO 2>/dev/null)
+    if [ -z "$INFO" ]; then
+      echo "INFO returned nothing - not started"
+      exit 1
+    fi
+    {{- include "redis-sentinel.probe.loadedGate" . | nindent 4 }}
+
+  # Sentinel liveness AND readiness. PING only, deliberately.
+  #
+  # A Sentinel that cannot currently reach its master MUST stay Ready: it is a voting
+  # member of the quorum, and it is the only way clients discover the new master.
+  # Gating it on "knows a healthy master" would remove every Sentinel from discovery
+  # at exactly the moment discovery matters.
+  health-check-sentinel.sh: |
+    #!/bin/sh
+    # No `set -e` - the exit code is the probe result.
+    {{- include "redis-sentinel.scliFunc" . | nindent 4 }}
+    scli ping

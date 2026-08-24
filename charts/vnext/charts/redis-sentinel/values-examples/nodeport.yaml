@@ -1,69 +1,105 @@
-# NodePort Configuration for Redis Sentinel
-# Exposes Redis and Sentinel outside the cluster
+# Redis Sentinel reachable from OUTSIDE the cluster over NodePort.
+#
+# There are two NodePort paths in this chart and only one of them works for this.
+# This file used to use the other one, so read this before changing it back.
+#
+#   service.type: NodePort              (the SHARED Service - what this file used to do)
+#     One NodePort in front of the <release>-redis-sentinel Service, which selects EVERY
+#     pod. A client connecting to it lands on a random one, so roughly two writes in three
+#     come back "READONLY You can't write against a read only replica". Fine for reaching
+#     *a* Sentinel - any of them can answer who the master is - and wrong for Redis.
+#
+#   externalAccess.enabled: true        (per-pod Services - what this file does now)
+#     One Service per pod, so every pod has its own reachable address, which is what
+#     Sentinel discovery needs: the address it hands a client has to identify ONE pod.
+#
+# Sentinel discovery from outside needs BOTH of the settings below. Without them the pods
+# announce their in-cluster FQDN: a client can reach a pod directly, ask who the master is,
+# and get back an address it cannot route to - failing on the second hop with nothing
+# saying why. NOTES.txt warns at install time if either is missing.
 
-# OpenShift compatibility
 openshift:
   enabled: true
 
-# Use NodePort service type
-service:
-  type: NodePort
-  
-  # Redis NodePort configuration
-  redis:
-    port: 6379
-    # Optional: Specify NodePort (must be in range 30000-32767)
-    # Leave empty to let Kubernetes assign automatically
-    nodePort: 30379
-  
-  # Sentinel NodePort configuration  
-  sentinel:
-    port: 26379
-    # Optional: Specify NodePort (must be in range 30000-32767)
-    # Leave empty to let Kubernetes assign automatically
-    nodePort: 30026
-  
-  annotations: {}
-
-# Standard configuration
 replicaCount: 3
 
-# Enable metrics for monitoring
+externalAccess:
+  enabled: true
+
+  service:
+    type: NodePort
+
+    # REPLACE THIS. One node's IP, or a VIP in front of the nodes - whatever address your
+    # clients can actually reach. Every pod announces itself at this address on its own
+    # port below.
+    #
+    # It is one shared address rather than each pod announcing its own node, and that is
+    # forced: on a fresh install every Sentinel writes `sentinel monitor` pointing at
+    # pod-0, so pod-1 has to know pod-0's external address - which it cannot learn if that
+    # address is "whichever node pod-0 landed on".
+    nodeHost: "10.1.2.3"
+
+    # One entry per pod, in ordinal order, inside --service-node-port-range
+    # (30000-32767 by default) or the API server rejects the Service.
+    #
+    # Pinned rather than auto-assigned because the pods have to ANNOUNCE these numbers.
+    # A random port is unknowable at render time and therefore unannounceable, which is
+    # why leaving them out silently falls back to in-cluster addresses.
+    nodePorts:
+      redis:    [30001, 30002, 30003]
+      sentinel: [31001, 31002, 31003]
+
+    # Required with nodeHost. Local delivers traffic arriving at a node ONLY to pods on
+    # that node, so a single shared address would reach one pod and leave the other two
+    # looking permanently down from outside.
+    externalTrafficPolicy: Cluster
+
+# The SHARED Service stays ClusterIP on purpose - see the header. Exposing it as NodePort
+# as well would give you an address that works for Sentinel queries and randomly fails
+# writes, which is worse than not having it.
+service:
+  type: ClusterIP
+  redis:
+    port: 6379
+  sentinel:
+    port: 26379
+  annotations: {}
+
 metrics:
   enabled: true
-  # If you want metrics also exposed via NodePort, 
-  # they will be accessible on the same NodePort service
   podAnnotations:
     enabled: true
 
-# Persistence enabled
 redis:
+  # Declared, not derived.
+  persistenceMode: aof-rdb
+
+  # -> io-threads. "auto" derives max(1, min(cores - 2, 8)) from the container CPU limit,
+  # so it follows the limit instead of going stale when you change it. Below 4 cores it
+  # correctly derives to nothing - threads on a one- or two-core CFS quota only buy
+  # throttling.
+  ioThreads: "auto"
+
   password: ""  # Auto-generate
   persistence:
     enabled: true
     size: 8Gi
 
-# Sentinel configuration
 sentinel:
   password: ""  # Auto-generate
   quorum: 2
 
-# Pod anti-affinity
-# Pod anti-affinity configuration
-# Leave as {} to use default soft anti-affinity with matchLabels
-# The default automatically uses: app.kubernetes.io/instance and app.kubernetes.io/name
+# Leave as {} to use the chart's default soft anti-affinity.
 affinity: {}
 
-# Security context
-# For OpenShift compatibility, leave these empty to auto-assign UIDs/GIDs
-# For standard Kubernetes, you can set specific values:
-# runAsUser: 999
-# runAsGroup: 999
-# fsGroup: 999
 securityContext:
-  runAsNonRoot: true
-  # Uncomment below for non-OpenShift environments if needed:
-  # runAsUser: 999
-  # runAsGroup: 999
-  # fsGroup: 999
-
+  # The chart picks ONE of these two blocks based on openshift.enabled. A flat
+  # runAsNonRoot/runAsUser here would be silently ignored - the templates only read
+  # securityContext.kubernetes and securityContext.openshift.
+  kubernetes:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  # Empty on OpenShift so the SCC assigns UIDs/GIDs.
+  openshift: {}

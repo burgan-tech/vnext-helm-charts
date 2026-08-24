@@ -14,5 +14,10 @@ spec:
   selector:
     matchLabels:
       {{- include "redis-sentinel.selectorLabels" . | nindent 6 }}
+      {{- /* component narrows this to the StatefulSet's pods. The chart's Job pods
+           carry the same name+instance labels, and a COMPLETED job pod is not Ready
+           yet still counts toward the PDB's expected total - which takes
+           allowed-disruptions to 0 and blocks node drains. */}}
+      app.kubernetes.io/component: redis
 {{- end }}
 

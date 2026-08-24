@@ -9,6 +9,20 @@ replicaCount: 3
 
 # Auto-generate passwords
 redis:
+  # Declared, not derived.
+  persistenceMode: aof-rdb
+  # -> io-threads. "auto" derives max(1, min(cores - 2, 8)) from the container CPU
+  # limit, so it follows resources.limits.cpu instead of going stale when you change
+  # it. Below 4 cores it correctly derives to nothing - adding threads to a one- or
+  # two-core CFS quota only buys throttling.
+  #
+  # Set here rather than as a chart default because io-threads is NOT
+  # runtime-modifiable: defaulting it on would restart every existing release AND
+  # change how it schedules work, in an upgrade meant to be routine. A new install
+  # from this file gets it; an existing release is never changed behind its back.
+  ioThreads: "auto"
+
+
   password: ""
   persistence:
     enabled: true
@@ -59,9 +73,14 @@ affinity: {}
 # runAsGroup: 999
 # fsGroup: 999
 securityContext:
-  runAsNonRoot: true
-  # Uncomment below for non-OpenShift environments if needed:
-  # runAsUser: 999
-  # runAsGroup: 999
-  # fsGroup: 999
+  # The chart picks ONE of these two blocks based on openshift.enabled.
+  # A flat runAsNonRoot/runAsUser here would be silently ignored - the templates
+  # only read securityContext.kubernetes and securityContext.openshift.
+  kubernetes:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  # Leave empty on OpenShift so the SCC assigns UIDs/GIDs automatically
+  openshift: {}
 

@@ -1,0 +1,121 @@
+# redis-sentinel: AOF-only persistence (persistenceMode: aof)
+#
+# Durable with a bounded loss window (appendfsync everysec = at most ~1s of acknowledged
+# writes on an ungraceful kill), and no snapshots - so no periodic BGSAVE fork. Restart
+# time grows with the AOF size, and readiness waits for that replay to finish.
+
+replicaCount: 3
+
+image:
+  registry: docker.io
+  repository: redis
+  pullPolicy: IfNotPresent
+  tag: "8.8.0-alpine"
+
+auth:
+  existingSecret: ""
+
+redis:
+  password: ""
+  port: 6379
+
+  persistenceMode: aof
+  # -> io-threads. "auto" derives max(1, min(cores - 2, 8)) from the container CPU
+  # limit, so it follows resources.limits.cpu instead of going stale when you change
+  # it. Below 4 cores it correctly derives to nothing - adding threads to a one- or
+  # two-core CFS quota only buys throttling.
+  #
+  # Set here rather than as a chart default because io-threads is NOT
+  # runtime-modifiable: defaulting it on would restart every existing release AND
+  # change how it schedules work, in an upgrade meant to be routine. A new install
+  # from this file gets it; an existing release is never changed behind its back.
+  ioThreads: "auto"
+
+
+  appendfsync: "everysec"
+  aof:
+    autoRewritePercentage: 100
+    autoRewriteMinSize: "64mb"
+    loadTruncated: true
+    useRdbPreamble: true
+
+  # maxMemory IS pinned here, and it is the PVC that decides it - not RAM.
+  #
+  #   disk    4Gi PVC / 3 = ~1365mb. A durable node needs the dataset PLUS the AOF,
+  #           PLUS the temp file an AOF rewrite writes, PLUS the temp RDB a replica
+  #           full-sync stages to disk. ~3x is the working rule.
+  #   RAM     3Gi limit x 0.6 = 1843mb, which the ratio would give on its own - and
+  #           that would need a 5.4Gi PVC.
+  #
+  # The PVC is the binding ceiling, so the pin stays. volumeClaimTemplates is
+  # IMMUTABLE: raising persistence.size here would break `helm upgrade` for anyone
+  # already running this example, so maxMemory is sized to FIT the PVC instead.
+  #
+  # For a bigger dataset set BOTH at install time - it cannot be changed later
+  # without recreating the StatefulSet with --cascade=orphan.
+  maxMemory: "1300mb"
+  # Never allkeys-* on a durable release: eviction DELETEs committed keys and the DELs
+  # go into the AOF, so the loss is not recoverable from disk either.
+  maxMemoryPolicy: "noeviction"
+
+  # ~3x maxmemory. volumeClaimTemplates is IMMUTABLE - set this correctly at install
+  # time, because growing it later needs a StatefulSet recreate with --cascade=orphan.
+  persistence:
+    enabled: true
+    size: 4Gi
+
+  # Was hand-written into extraConfig. First-class now, and rendered
+  # BEFORE extraConfig - so anything you add there still wins.
+  network:
+    tcpKeepalive: 60
+
+  extraConfig: |
+    # Nothing here: every line this example used to carry was either a
+    # Redis default written out, or is a first-class value now.
+sentinel:
+  quorum: 2                     # (replicaCount / 2) + 1
+  downAfterMilliseconds: 30000
+  failoverTimeout: 180000
+  parallelSyncs: 1
+
+# Hand mastership over before a planned stop, so writes do not fail for
+# downAfterMilliseconds while Sentinel notices.
+gracefulShutdown:
+  enabled: true
+  failoverTimeout: 20
+terminationGracePeriodSeconds: 60
+
+resources:
+  redis:
+    limits:
+      cpu: 1000m
+      memory: 3Gi
+    requests:
+      cpu: 100m
+      memory: 100Mi
+  sentinel:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# A durable node can need minutes to replay its AOF, and readiness waits for it - so the
+# rolling update waits too, which is the point. The startup probe stays OFF by default
+# in this chart: an exhausted startup probe KILLS the container and the restart starts
+# the load over. Turn it on only with a budget of ~3x the measured load time.
+probes:
+  startup:
+    enabled: false
+    failureThreshold: 180
+
+openshift:
+  enabled: true
+
+metrics:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: oliver006/redis_exporter
+    tag: v1.79.0

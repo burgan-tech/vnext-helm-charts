@@ -9,6 +9,18 @@ global:
   # Example: "banking", "contract", "core"
   appDomain: "core"
 
+  # Runtime configuration (runtimeconfig.json) for the vNext platform.
+  # Written verbatim into the -runtime ConfigMap. Overriding replaces the whole
+  # document, so repeat every key you want to keep.
+  runtimeConfigJson: |
+    {
+      "runtimeOptions": {
+        "configProperties": {
+          "System.Threading.ThreadPool.MinThreads": 50
+        }
+      }
+    }
+
   notificationComponents: []
     # - name: sms
     #   spec: 
@@ -1060,6 +1072,11 @@ redis-sentinel:
       repl-diskless-sync yes
       appendfsync no
       repl-diskless-load on-empty-db
+      lazyfree-lazy-eviction yes
+      lazyfree-lazy-expire yes
+      lazyfree-lazy-server-del yes
+      lazyfree-lazy-user-del yes
+      replica-lazy-flush yes
     
     persistence:
       enabled: true

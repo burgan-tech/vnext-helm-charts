@@ -1,4 +1,14 @@
-{{- if .Values.externalAccess.enabled }}
+{{- /*
+  Renders only when externalAccess.restartJob.enabled is explicitly turned on. It is off
+  by default because this chart's pods already announce correctly on their first boot -
+  every announce value is a render-time constant and both config files are recreated from
+  the ConfigMap on every boot, so a restart produces identical configuration. See the
+  restartJob comment in values.yaml for the measurement.
+
+  redis-cluster's copy of this job is NOT redundant - it gates the announce on nodes.conf
+  and needs the second boot. Do not "align" the two.
+*/ -}}
+{{- if and .Values.externalAccess.enabled .Values.externalAccess.restartJob.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -36,7 +46,7 @@ spec:
       {{- end }}
       containers:
       - name: restart-statefulset
-        image: quay.io/openshift/origin-cli:latest
+        image: {{ include "redis-sentinel.jobImage" . }}
         {{- if .Values.openshift.enabled }}
         {{- with .Values.containerSecurityContext.openshift }}
         securityContext:
@@ -72,15 +82,26 @@ spec:
             ELAPSED=0
             REPLICAS={{ .Values.replicaCount }}
             
+            # readyReplicas alone is NOT enough: it is still equal to replicas at the very
+            # START of a rollout, before the controller has terminated the first pod. Helm
+            # runs post-upgrade hooks without waiting for the workload, so this job can
+            # arrive exactly in that window - and would then delete pods while the
+            # StatefulSet controller is deleting its own, taking down two at once.
+            # currentRevision == updateRevision with updatedReplicas == replicas is what
+            # actually means "no rollout in flight".
             while [ $ELAPSED -lt $MAX_WAIT ]; do
-              READY_PODS=$(kubectl get statefulset ${STATEFULSET_NAME} -n $NAMESPACE -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-              
-              if [ "$READY_PODS" = "$REPLICAS" ]; then
-                echo "✓ All ${REPLICAS} pods are ready"
+              STS=$(kubectl get statefulset ${STATEFULSET_NAME} -n $NAMESPACE \
+                -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.currentRevision}/{.status.updateRevision}' 2>/dev/null || echo "0/0//x")
+              READY_PODS="${STS%%/*}"; REST="${STS#*/}"
+              UPDATED="${REST%%/*}"; REST="${REST#*/}"
+              CUR_REV="${REST%%/*}"; UPD_REV="${REST#*/}"
+
+              if [ "$READY_PODS" = "$REPLICAS" ] && [ "$UPDATED" = "$REPLICAS" ] && [ "$CUR_REV" = "$UPD_REV" ]; then
+                echo "✓ All ${REPLICAS} pods are ready and no rollout is in flight"
                 break
               fi
-              
-              echo "Waiting for pods to be ready... (${READY_PODS}/${REPLICAS} ready, ${ELAPSED}s / ${MAX_WAIT}s)"
+
+              echo "Waiting... (${READY_PODS:-0}/${REPLICAS} ready, ${UPDATED:-0}/${REPLICAS} updated, rollout $([ "$CUR_REV" = "$UPD_REV" ] && echo settled || echo in-flight), ${ELAPSED}s / ${MAX_WAIT}s)"
               sleep 10
               ELAPSED=$((ELAPSED + 10))
             done
@@ -94,8 +115,11 @@ spec:
             echo "Restarting StatefulSet to enable external IP announcement..."
             echo ""
             
-            # Restart the StatefulSet by deleting all pods in sequence
-            # Start from last pod to avoid disrupting the master (pod-0)
+            # Delete every pod, highest ordinal first. This does NOT spare the master: the
+            # loop still reaches pod-0, and whichever pod is master at that moment gets
+            # deleted, which moves mastership. Reverse order only postpones it - and after
+            # a failover the master is not pod-0 anyway. The preStop hook hands mastership
+            # over first, so the move is graceful, not a data loss; it is still a move.
             for i in $(seq $(($REPLICAS - 1)) -1 0); do
               POD_NAME="${STATEFULSET_NAME}-${i}"
               echo "Restarting pod: $POD_NAME"

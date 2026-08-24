@@ -42,7 +42,7 @@ spec:
       {{- end }}
       containers:
       - name: redis-exporter
-        image: "{{ .Values.sentinelExporter.image.repository }}:{{ .Values.sentinelExporter.image.tag }}"
+        image: {{ include "redis-sentinel.sentinelExporter.image" . }}
         imagePullPolicy: {{ .Values.sentinelExporter.image.pullPolicy }}
         {{- if .Values.openshift.enabled }}
         {{- with .Values.containerSecurityContext.openshift }}

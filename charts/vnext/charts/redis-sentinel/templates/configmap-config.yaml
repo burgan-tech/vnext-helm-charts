@@ -1,3 +1,7 @@
+{{- $rdbV := include "redis-sentinel.rdbValues" . | fromYaml -}}
+{{- $aofV := include "redis-sentinel.aofValues" . | fromYaml -}}
+{{- $netV := include "redis-sentinel.networkValues" . | fromYaml -}}
+{{- $replV := include "redis-sentinel.replicationValues" . | fromYaml -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -37,38 +41,177 @@ data:
     # Replication
     replica-read-only yes
     
+    {{- $mode := include "redis-sentinel.persistenceMode" . }}
+    {{- $explicit := eq (include "redis-sentinel.persistence.explicitMode" .) "true" }}
+    {{- $aof := eq (include "redis-sentinel.persistence.aof" .) "true" }}
+    {{- $rdb := eq (include "redis-sentinel.persistence.rdb" .) "true" }}
+    # persistence-mode: {{ $mode }} (source: {{ if $explicit }}redis.persistenceMode{{ else }}derived from redis.persistence.enabled + redis.appendonly{{ end }})
+    {{- if not $explicit }}
     # Persistence
-    {{- if .Values.redis.persistence.enabled }}
-    save 900 1
-    save 300 10
-    save 60 10000
+    #
+    # LEGACY LAYOUT, kept byte-for-byte because redis.persistenceMode is not
+    # declared: the block stays here, before extraConfig, so extraConfig keeps the
+    # last word on every directive below - which is what this release already
+    # renders. Declare redis.persistenceMode to get the full per-mode surface
+    # (aof-*, rdb*, stop-writes-on-bgsave-error, repl-diskless-*) emitted
+    # authoritatively after extraConfig instead.
+    {{- if $rdb }}
+    {{- range $rdbV.savePoints }}
+    save {{ . }}
+    {{- end }}
     {{- else }}
     save ""
     {{- end }}
-    
-    {{- if .Values.redis.appendonly }}
+
+    {{- if $aof }}
     appendonly yes
-    appendfilename "appendonly.aof"
-    appendfsync everysec
+    appendfilename "{{ $aofV.appendfilename }}"
+    {{- /* `with`, not a bare emission: a --reuse-values upgrade from a chart
+           that had appendfsync HARDCODED leaves this value absent, and
+           `appendfsync {{ nil }}` renders the directive with no argument.
+           redis-server then dies at startup with
+           *** FATAL CONFIG FILE ERROR *** 'appendfsync' wrong number of
+           arguments - a CrashLoopBackOff mid-rollout, which `helm template`
+           exiting 0 does not catch. Omitting the line falls back to Redis's
+           own default, which is everysec: the same value. */}}
+    {{- with .Values.redis.appendfsync }}
+    appendfsync {{ . }}
+    {{- end }}
     {{- else }}
     appendonly no
     {{- end }}
-    
+    {{- end }}
+
     # Memory Management
+    # Before extraConfig on purpose: maxmemory and maxmemory-policy are the two
+    # directives most likely to be pinned there, and that tuning keeps winning.
     maxmemory {{ include "redis-sentinel.effectiveMaxMemory" . }}
-    maxmemory-policy {{ .Values.redis.maxMemoryPolicy }}
-    
+    maxmemory-policy {{ include "redis-sentinel.maxMemoryPolicy" . }}
+
     # Network
-    tcp-backlog 511
-    timeout 0
-    tcp-keepalive 300
-    
+    # These were hardcoded, and the chart's own default extraConfig then overrode
+    # two of them - it shipped `tcp-keepalive 60` against a template that wrote
+    # 300, and `timeout 0` twice. The defaults below are the values that were
+    # EFFECTIVE, so nothing changes; they are just no longer said twice.
+    tcp-backlog {{ $netV.tcpBacklog }}
+    timeout {{ $netV.timeout }}
+    tcp-keepalive {{ $netV.tcpKeepalive }}
+    {{- /* Performance. Mode-independent, and before extraConfig like the memory
+         block above: a directive repeated in extraConfig still wins there.
+
+         repl-backlog-size is emitted here rather than in the persistence block
+         below because it is not a persistence directive - and the persistence
+         block only renders when the mode is DECLARED, so a release still on the
+         deprecated keys used to set redis.replication.replBacklogSize and get
+         nothing. */}}
+    {{- $repl := .Values.redis.replication | default dict }}
+    {{- $replBacklog := get $repl "replBacklogSize" }}
+    {{- $ioThreads := include "redis-sentinel.ioThreadsEffective" . }}
+    {{- if ne ($replBacklog | toString) "" }}
+    # Counted OUTSIDE maxmemory: this is RAM per master on top of the dataset.
+    repl-backlog-size {{ $replBacklog }}
+    {{- end }}
+    {{- if $ioThreads }}
+    # {{ if eq (.Values.redis.ioThreads | toString | trim) "auto" }}Derived from resources.redis.limits.cpu ({{ include "redis-sentinel.cpuLimitCores" . }} cores): max(1, min(cores-2, 8)){{ else }}Pinned via redis.ioThreads{{ end }}.
+    # NOT runtime-modifiable - changing this restarts the node.
+    io-threads {{ $ioThreads }}
+    {{- if .Values.redis.ioThreadsDoReads }}
+    io-threads-do-reads yes
+    {{- end }}
+    {{- end }}
+    {{- if .Values.redis.lazyFreeing }}
+    # Free big objects off the event loop. Reclaim happens slightly later, so a
+    # node at its maxmemory ceiling stays there a little longer. replica-lazy-flush
+    # is the one that pays off in this chart: it takes the flush before a full
+    # resync off the event loop, and a Sentinel failover the replica cannot
+    # partially resync through ends in exactly that flush.
+    lazyfree-lazy-eviction yes
+    lazyfree-lazy-expire yes
+    lazyfree-lazy-server-del yes
+    replica-lazy-flush yes
+    {{- end }}
+
     # Logging
     loglevel notice
-    
+
     # Extra configuration
     {{- if .Values.redis.extraConfig }}
+    {{- if $explicit }}
+    {{ include "redis-sentinel.extraConfig.filtered" . | nindent 4 }}
+    {{- else }}
     {{ .Values.redis.extraConfig | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- if $explicit }}
+
+    # ==========================================================================
+    # Persistence - AUTHORITATIVE
+    # ==========================================================================
+    # Emitted last: redis.persistenceMode is declared, so the mode owns these
+    # directives and any copy in extraConfig has been commented out above. Set
+    # redis.extraConfigOverridesPersistence=true to restore the old precedence.
+    dir /data
+    {{- if $rdb }}
+    {{- range $rdbV.savePoints }}
+    save {{ . }}
+    {{- end }}
+    {{- if not $rdbV.savePoints }}
+    save ""
+    {{- end }}
+    dbfilename {{ $rdbV.dbfilename }}
+    rdbcompression {{ $rdbV.compression | ternary "yes" "no" }}
+    rdbchecksum {{ $rdbV.checksum | ternary "yes" "no" }}
+    {{- else }}
+    save ""
+    {{- end }}
+    # Off by default: with save points configured, a failed background save makes
+    # Redis REFUSE WRITES. On a PVC that filled up that turns a monitoring problem
+    # into a write outage for the whole pair. Alert on redis_rdb_last_bgsave_status.
+    stop-writes-on-bgsave-error {{ $rdbV.stopWritesOnBgsaveError | ternary "yes" "no" }}
+    {{- if $aof }}
+    appendonly yes
+    {{- with .Values.redis.appendfsync }}
+    appendfsync {{ . }}
+    {{- end }}
+    auto-aof-rewrite-percentage {{ $aofV.autoRewritePercentage }}
+    auto-aof-rewrite-min-size {{ $aofV.autoRewriteMinSize }}
+    no-appendfsync-on-rewrite {{ $aofV.noAppendfsyncOnRewrite | ternary "yes" "no" }}
+    aof-load-truncated {{ $aofV.loadTruncated | ternary "yes" "no" }}
+    aof-use-rdb-preamble {{ $aofV.useRdbPreamble | ternary "yes" "no" }}
+    aof-timestamp-enabled {{ $aofV.timestampEnabled | ternary "yes" "no" }}
+    {{- with $aofV.appendfilename }}
+    appendfilename "{{ . }}"
+    {{- end }}
+    {{- with $aofV.appenddirname }}
+    # Redis >= 7.0 only; emitted only because it is set.
+    appenddirname "{{ . }}"
+    {{- end }}
+    {{- else }}
+    appendonly no
+    {{- end }}
+    # Replication transport. on-empty-db is safe in every mode: it only takes the
+    # socket path when the replica's DB is empty, otherwise it stages to disk.
+    repl-diskless-sync {{ $replV.replDisklessSync | ternary "yes" "no" }}
+    repl-diskless-sync-delay {{ $replV.replDisklessSyncDelay }}
+    {{- if eq $mode "diskless" }}
+    repl-diskless-load on-empty-db
+    {{- else }}
+    repl-diskless-load disabled
+    {{- end }}
+    # A replica whose master link is down: serve stale data (cache) or refuse
+    # (store). In a Sentinel pair a disconnected replica may be the last copy, so
+    # this stays "yes" unless the mode is durable and you would rather error.
+    replica-serve-stale-data {{ if eq $mode "diskless" }}yes{{ else }}{{ .Values.redis.replicaServeStaleData | default "yes" }}{{ end }}
+    {{- with .Values.redis.shutdownTimeout }}
+    # Seconds redis-server waits on SIGTERM for replicas to catch up. Redis >= 7.0.
+    shutdown-timeout {{ . }}
+    {{- end }}
+    {{- if .Values.redis.extraConfigOverridesPersistence }}
+
+    # redis.extraConfigOverridesPersistence=true - extraConfig repeated last so it
+    # wins over the block above. You own persistence now.
+    {{ .Values.redis.extraConfig | nindent 4 }}
+    {{- end }}
     {{- end }}
   
   sentinel.conf: |
@@ -80,11 +223,16 @@ data:
     {{- else }}
     port {{ .Values.sentinel.port }}
     {{- end }}
-    {{- if .Values.redis.persistence.enabled }}
+    # Unconditional /data.
+    #
+    # This used to be /tmp when persistence was disabled - but /tmp is NOT a mounted
+    # volume in the sentinel container (it mounts /data, /config, /scripts,
+    # /secrets), so Sentinel was rewriting its config onto the container root
+    # filesystem, which breaks under any securityContext with
+    # readOnlyRootFilesystem: true. /data is mounted in both cases (a PVC when
+    # persistence.enabled, an emptyDir otherwise), so nothing durable moves: state
+    # that lived in /tmp was already lost on every restart.
     dir /data
-    {{- else }}
-    dir /tmp
-    {{- end }}
     
     {{- if .Values.tls.enabled }}
     # TLS/SSL Configuration

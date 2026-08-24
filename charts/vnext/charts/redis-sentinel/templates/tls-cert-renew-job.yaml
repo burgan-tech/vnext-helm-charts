@@ -34,7 +34,7 @@ spec:
       {{- end }}
       containers:
       - name: cert-renewer
-        image: quay.io/openshift/origin-cli:latest
+        image: {{ include "redis-sentinel.jobImage" . }}
         {{- if .Values.openshift.enabled }}
         {{- with .Values.containerSecurityContext.openshift }}
         securityContext:

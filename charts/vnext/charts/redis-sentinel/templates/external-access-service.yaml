@@ -8,6 +8,12 @@
 {{- $serviceLabels := .Values.externalAccess.service.labels -}}
 {{- $loadBalancerSourceRanges := .Values.externalAccess.service.loadBalancerSourceRanges -}}
 {{- $externalTrafficPolicy := .Values.externalAccess.service.externalTrafficPolicy -}}
+{{- $isNodePort := eq .Values.externalAccess.service.type "NodePort" -}}
+{{- $npRedis := ((.Values.externalAccess.service.nodePorts).redis) | default list -}}
+{{- $npSentinel := ((.Values.externalAccess.service.nodePorts).sentinel) | default list -}}
+{{- /* A pinned nodePort is what makes Sentinel discovery possible from outside: the
+     port has to be knowable at render time so the pods can announce it. Left unpinned
+     Kubernetes assigns a random one, which nothing can announce. */ -}}
 
 {{- range $i := until $replicaCount }}
 ---
@@ -40,10 +46,16 @@ spec:
       protocol: TCP
       port: {{ $redisPort }}
       targetPort: redis
+      {{- if and $isNodePort (gt (len $npRedis) $i) }}
+      nodePort: {{ index $npRedis $i }}
+      {{- end }}
     - name: tcp-sentinel
       protocol: TCP
       port: {{ $sentinelPort }}
       targetPort: sentinel
+      {{- if and $isNodePort (gt (len $npSentinel) $i) }}
+      nodePort: {{ index $npSentinel $i }}
+      {{- end }}
   {{- if gt (len $loadBalancerIPs) 0 }}
   {{- if gt (len $loadBalancerIPs) $i }}
   loadBalancerIP: {{ index $loadBalancerIPs $i }}
