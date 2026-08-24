@@ -184,16 +184,6 @@ global:
     # are retrieved from Vault secrets.
     connectionString: "Host=vnext-postgres-headless;Port=5432;Database=vNext_WorkflowDb;Username=vnext;Password=changeme;"
     
-    # ClickHouse configuration for analytics and time-series data
-    # Note: ClickHouse deployment is not included in this chart.
-    # If you want to use ClickHouse, deploy it separately and configure the connection here.
-    clickhouse:
-      # Enable ClickHouse integration for workflow analytics
-      # Set to false if not using ClickHouse
-      enabled: false
-      # ClickHouse connection string (required only if enabled is true)
-      # Example: "Host=clickhouse.analytics.svc;Port=8123;Database=workflow_analytics;Username=default;Password=your-password;"
-      connectionString: ""
   
   # -----------------------------------------------------------------------------
   # Redis Configuration
