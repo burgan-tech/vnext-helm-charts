@@ -1,0 +1,18 @@
+{{- if and (include "vnext.pythonKubernetesEnabled" .) .Values.execution.python.container.kubernetes.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vnext.fullname" . }}-python-runner-deny-network
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "execution-python") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      vnext.burgan.tech/python-runner: "true"
+      vnext.burgan.tech/python-network: "none"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
+{{- end }}

@@ -32,6 +32,46 @@ data:
   DAPR_APP_ID: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
   OrchestrationApi__AppId: {{ .Values.orchestrator.dapr.appId | default (printf "vnext-%s-app" .Values.global.appDomain) | quote }}
 
+  {{- if .Values.execution.python.enabled }}
+  # Python task execution
+  Python__Enabled: "true"
+  Python__DefaultMode: {{ .Values.execution.python.defaultMode | quote }}
+  Python__MaxTimeoutSeconds: {{ .Values.execution.python.maxTimeoutSeconds | int64 | quote }}
+  Python__MaxCodeBytes: {{ .Values.execution.python.maxCodeBytes | int64 | quote }}
+  Python__MaxInputBytes: {{ .Values.execution.python.maxInputBytes | int64 | quote }}
+  Python__MaxOutputBytes: {{ .Values.execution.python.maxOutputBytes | int64 | quote }}
+  Python__MaxStdoutBytes: {{ .Values.execution.python.maxStdoutBytes | int64 | quote }}
+  Python__MaxStderrBytes: {{ .Values.execution.python.maxStderrBytes | int64 | quote }}
+  {{- range $index, $mode := .Values.execution.python.enabledModes }}
+  Python__EnabledModes__{{ $index }}: {{ $mode | quote }}
+  {{- end }}
+  {{- range $index, $module := .Values.execution.python.allowedModules }}
+  Python__AllowedModules__{{ $index }}: {{ $module | quote }}
+  {{- end }}
+  Python__Container__Driver: {{ .Values.execution.python.container.driver | quote }}
+  Python__Container__Image: {{ include "vnext.image" (dict "image" .Values.execution.python.container.image "defaultTag" .Chart.AppVersion) | quote }}
+  Python__Container__PullPolicy: {{ .Values.execution.python.container.image.pullPolicy | quote }}
+  Python__Container__NetworkMode: {{ .Values.execution.python.container.networkMode | quote }}
+  Python__Container__MaxConcurrency: {{ .Values.execution.python.container.maxConcurrency | int64 | quote }}
+  Python__Container__MemoryBytes: {{ .Values.execution.python.container.memoryBytes | int64 | quote }}
+  Python__Container__NanoCpus: {{ .Values.execution.python.container.nanoCpus | int64 | quote }}
+  Python__Container__PidsLimit: {{ .Values.execution.python.container.pidsLimit | int64 | quote }}
+  Python__Container__TmpfsBytes: {{ .Values.execution.python.container.tmpfsBytes | int64 | quote }}
+  Python__Container__Kubernetes__Namespace: {{ .Values.execution.python.container.kubernetes.namespace | default .Release.Namespace | quote }}
+  Python__Container__Kubernetes__KubeConfigPath: {{ .Values.execution.python.container.kubernetes.kubeConfigPath | quote }}
+  Python__Container__Kubernetes__Context: {{ .Values.execution.python.container.kubernetes.context | quote }}
+  Python__Container__Kubernetes__ContainerName: {{ .Values.execution.python.container.kubernetes.containerName | quote }}
+  Python__Container__Kubernetes__RunnerServiceAccountName: {{ .Values.execution.python.container.kubernetes.runnerServiceAccountName | quote }}
+  Python__Container__Kubernetes__PodStartTimeoutSeconds: {{ .Values.execution.python.container.kubernetes.podStartTimeoutSeconds | int64 | quote }}
+  Python__Container__Kubernetes__PollIntervalMilliseconds: {{ .Values.execution.python.container.kubernetes.pollIntervalMilliseconds | int64 | quote }}
+  Python__Container__Kubernetes__JobTtlSecondsAfterFinished: {{ .Values.execution.python.container.kubernetes.jobTtlSecondsAfterFinished | int64 | quote }}
+  Python__Container__Kubernetes__RuntimeClassName: {{ .Values.execution.python.container.kubernetes.runtimeClassName | quote }}
+  {{- $pythonPullSecrets := coalesce .Values.execution.python.container.kubernetes.imagePullSecrets .Values.global.imagePullSecrets }}
+  {{- range $index, $secret := $pythonPullSecrets }}
+  Python__Container__Kubernetes__ImagePullSecrets__{{ $index }}: {{ $secret.name | quote }}
+  {{- end }}
+  {{- end }}
+
   # Component-specific environment variables
   {{- if .Values.execution.extraEnvConfig }}
   {{- range $key, $value := .Values.execution.extraEnvConfig }}

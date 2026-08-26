@@ -584,6 +584,61 @@ execution:
   
   # Override global settings if needed
   imagePullSecrets: []
+
+  # Trusted Python task execution. Container mode uses short-lived Kubernetes
+  # Jobs and the pods/attach API; it is opt-in and disabled by default.
+  python:
+    enabled: false
+    defaultMode: pythonNet
+    enabledModes:
+      - pythonNet
+      - process
+    maxTimeoutSeconds: 50
+    maxCodeBytes: 262144
+    maxInputBytes: 2097152
+    maxOutputBytes: 2097152
+    maxStdoutBytes: 32768
+    maxStderrBytes: 32768
+    allowedModules:
+      - "*"
+    container:
+      driver: kubernetes
+      image:
+        repository: ghcr.io/burgan-tech/vnext/python-runner
+        tag: ""  # Defaults to chart appVersion
+        digest: ""  # Prefer a release digest in production
+        pullPolicy: IfNotPresent
+      networkMode: none
+      maxConcurrency: 2
+      memoryBytes: 2147483648
+      nanoCpus: 1000000000
+      # Kubernetes has no portable per-Pod PID limit. This value is retained as
+      # policy metadata; enforce PID limits through the node/container runtime.
+      pidsLimit: 128
+      tmpfsBytes: 67108864
+      kubernetes:
+        namespace: ""  # Empty uses the Helm release namespace
+        kubeConfigPath: ""  # Empty uses in-cluster configuration
+        context: ""
+        containerName: python-runner
+        runnerServiceAccountName: ""
+        # List of Kubernetes Secret objects, for example: [{name: regcred}].
+        # Empty falls back to global.imagePullSecrets.
+        imagePullSecrets: []
+        podStartTimeoutSeconds: 30
+        pollIntervalMilliseconds: 250
+        jobTtlSecondsAfterFinished: 60
+        runtimeClassName: ""
+        rbac:
+          create: true
+          # Empty creates <release>-vnext-execution-python. When create=false,
+          # empty falls back to the chart's shared service account.
+          serviceAccountName: ""
+          annotations: {}
+        networkPolicy:
+          # Requires a NetworkPolicy-capable CNI. The policy selects only Jobs
+          # whose configured networkMode is "none".
+          enabled: true
   
   # Dapr specific annotations
   dapr:
@@ -1401,4 +1456,3 @@ postgres:
   nodeSelector: {}
   affinity: {}
   tolerations: []
-

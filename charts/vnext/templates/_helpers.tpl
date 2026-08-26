@@ -61,6 +61,26 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
+{{/* Return true when Python Kubernetes container execution is enabled. */}}
+{{- define "vnext.pythonKubernetesEnabled" -}}
+{{- if and .Values.execution.enabled .Values.execution.python.enabled (has "container" .Values.execution.python.enabledModes) (eq .Values.execution.python.container.driver "kubernetes") -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/* Service account used by Execution when it controls Python runner Jobs. */}}
+{{- define "vnext.pythonExecutionServiceAccountName" -}}
+{{- if include "vnext.pythonKubernetesEnabled" . -}}
+  {{- if .Values.execution.python.container.kubernetes.rbac.create -}}
+    {{- default (printf "%s-execution-python" (include "vnext.fullname" .)) .Values.execution.python.container.kubernetes.rbac.serviceAccountName -}}
+  {{- else -}}
+    {{- default (include "vnext.serviceAccountName" .) .Values.execution.python.container.kubernetes.rbac.serviceAccountName -}}
+  {{- end -}}
+{{- else -}}
+  {{- include "vnext.serviceAccountName" . -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 Component labels - adds component label to common labels
 Usage: {{ include "vnext.componentLabels" (dict "context" . "component" "orchestrator") }}
@@ -363,6 +383,24 @@ Validate required values
   {{- $persistence := .Values.orchestrator.plugins.persistence | default dict -}}
   {{- if and (not $persistence.existingClaim) (ne ($persistence.accessMode | default "ReadWriteMany") "ReadWriteMany") -}}
     {{- $messages = append $messages "orchestrator.plugins.persistence.accessMode should be ReadWriteMany so multiple pods can share the plugins" -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Validate Python Kubernetes execution configuration */}}
+{{- if .Values.execution.python.enabled -}}
+  {{- if not (has .Values.execution.python.defaultMode .Values.execution.python.enabledModes) -}}
+    {{- $messages = append $messages "execution.python.defaultMode must be present in execution.python.enabledModes" -}}
+  {{- end -}}
+  {{- if and (has "container" .Values.execution.python.enabledModes) (not (has .Values.execution.python.container.driver (list "docker" "kubernetes"))) -}}
+    {{- $messages = append $messages "execution.python.container.driver must be docker or kubernetes" -}}
+  {{- end -}}
+{{- end -}}
+{{- if include "vnext.pythonKubernetesEnabled" . -}}
+  {{- if not .Values.execution.python.container.image.repository -}}
+    {{- $messages = append $messages "execution.python.container.image.repository is required for Kubernetes execution" -}}
+  {{- end -}}
+  {{- if not .Values.execution.python.container.kubernetes.containerName -}}
+    {{- $messages = append $messages "execution.python.container.kubernetes.containerName is required" -}}
   {{- end -}}
 {{- end -}}
 
