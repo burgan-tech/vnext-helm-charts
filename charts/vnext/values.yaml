@@ -156,7 +156,17 @@ global:
   dapr:
     # Enable or disable Dapr sidecar injection globally
     enabled: true
-    # Communication protocol between app and Dapr sidecar (http or grpc)
+    # Protocol the SIDECAR uses to call THE APP (dapr.io/app-protocol) — the inbound
+    # direction only: service-invocation delivery, pub/sub delivery, job callbacks.
+    #
+    # This is NOT how the app calls its sidecar. That direction is chosen by the SDK method
+    # the code calls (DaprClient's InvokeMethodAsync family is HTTP, InvokeMethodGrpcAsync is
+    # gRPC) and no Helm value can change it. Sidecar-to-sidecar is always gRPC regardless.
+    #
+    # MUST stay "http". Setting "grpc" makes the sidecar deliver over the Dapr AppCallback
+    # gRPC service, which the vNext hosts do not implement — they expose the HTTP surface
+    # (UseCloudEvents + MapSubscribeHandler + MVC controllers) and register no gRPC service.
+    # The switch fails closed on nothing: it silently breaks every inbound path at once.
     protocol: "http"
     # Dapr placement service endpoint for actor placement
     placementHost: "dapr-placement:50005"
