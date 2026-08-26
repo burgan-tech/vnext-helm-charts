@@ -130,7 +130,7 @@ Usage: {{ include "vnext.resources" (dict "component" .Values.orchestrator "glob
 
 {{/*
 Generate Dapr pod annotations
-Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain) }}
+Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol) }}
 */}}
 {{- define "vnext.daprAnnotations" -}}
 {{- if and .dapr.enabled .enabled -}}
@@ -148,7 +148,10 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | qu
 {{- end }}
 {{- if ne .component "db-migrator" }}
 dapr.io/app-port: {{ .dapr.appPort | quote }}
-dapr.io/app-protocol: {{ .dapr.protocol | default "http" | quote }}
+{{/* Per-component .dapr.protocol wins when set; global.dapr.protocol is the real
+     fallback (not a hardcoded "http") so that global value is not dead config. Callers
+     that don't pass "globalProtocol" still land on "http" via the final default. */}}
+dapr.io/app-protocol: {{ .dapr.protocol | default .globalProtocol | default "http" | quote }}
 {{- end }}
 {{- if .httpMaxRequestSize }}
 dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}

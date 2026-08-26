@@ -32,6 +32,14 @@ data:
   DAPR_APP_ID: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
   OrchestrationApi__AppId: {{ .Values.orchestrator.dapr.appId | default (printf "vnext-%s-app" .Values.global.appDomain) | quote }}
 
+  # Execution's two Kestrel listeners (HTTP/1.1 MVC + HTTP/2-only gRPC — see
+  # execution.dapr.appPort in values.yaml for why they can't share a port). Sourced from
+  # the same values.yaml numbers as the container's ports[] and the dapr.io/app-port
+  # annotation so the app's actual bindings, the pod spec and the sidecar's target can
+  # never disagree about which port speaks which protocol.
+  Kestrel__HttpPort: {{ .Values.execution.service.port | quote }}
+  Kestrel__GrpcPort: {{ .Values.execution.dapr.appPort | quote }}
+
   # Component-specific environment variables
   {{- if .Values.execution.extraEnvConfig }}
   {{- range $key, $value := .Values.execution.extraEnvConfig }}

@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain "httpMaxRequestSize" (coalesce .Values.execution.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "httpMaxRequestSize" (coalesce .Values.execution.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
         {{- with .Values.execution.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -57,6 +57,14 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.execution.service.port }}
+              protocol: TCP
+            # Dedicated HTTP/2-only port for the Dapr gRPC proxy-mode TaskInvoker surface.
+            # Kestrel can't multiplex HTTP/1.1 and h2c on one cleartext port (see
+            # execution.dapr.appPort in values.yaml for why), so this is a second listener,
+            # not a rename of the one above. dapr.io/app-port (rendered from the same value)
+            # targets this port, not "http".
+            - name: grpc
+              containerPort: {{ .Values.execution.dapr.appPort }}
               protocol: TCP
           {{- if .Values.execution.livenessProbe }}
           livenessProbe:

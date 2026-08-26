@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" $dbMigrator.dapr "enabled" .Values.global.dapr.enabled "component" "db-migrator" "appDomain" .Values.global.appDomain) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" $dbMigrator.dapr "enabled" .Values.global.dapr.enabled "component" "db-migrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol) | nindent 8 }}
         {{- with $dbMigrator.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
