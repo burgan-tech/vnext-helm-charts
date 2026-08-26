@@ -60,11 +60,15 @@ spec:
               protocol: TCP
             # Dedicated HTTP/2-only port for the Dapr gRPC proxy-mode TaskInvoker surface.
             # Kestrel can't multiplex HTTP/1.1 and h2c on one cleartext port (see
-            # execution.dapr.appPort in values.yaml for why), so this is a second listener,
-            # not a rename of the one above. dapr.io/app-port (rendered from the same value)
-            # targets this port, not "http".
+            # execution.grpcPort in values.yaml for why), so this is a second listener, not
+            # a rename of the one above. Sourced from execution.grpcPort, NOT
+            # execution.dapr.appPort (the dapr.io/app-port annotation) -- that value is
+            # protocol-dependent and equals execution.service.port (the "http" port above)
+            # by default, which would make this a duplicate containerPort and crash the pod
+            # at startup with an address-in-use error. dapr.io/app-port targets this port
+            # only once an operator has moved it here explicitly (see values.yaml).
             - name: grpc
-              containerPort: {{ .Values.execution.dapr.appPort }}
+              containerPort: {{ .Values.execution.grpcPort }}
               protocol: TCP
           {{- if .Values.execution.livenessProbe }}
           livenessProbe:

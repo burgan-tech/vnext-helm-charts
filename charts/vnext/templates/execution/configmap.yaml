@@ -32,11 +32,18 @@ data:
   DAPR_APP_ID: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
   OrchestrationApi__AppId: {{ .Values.orchestrator.dapr.appId | default (printf "vnext-%s-app" .Values.global.appDomain) | quote }}
 
-  # Execution's second Kestrel listener (HTTP/2-only h2c gRPC — see execution.dapr.appPort
+  # Execution's second Kestrel listener (HTTP/2-only h2c gRPC — see execution.grpcPort
   # in values.yaml for why it can't share a port with the HTTP/1.1 MVC/health/swagger
-  # listener). Sourced from the same values.yaml number as the container's second ports[]
-  # entry and the dapr.io/app-port annotation so the app's actual binding, the pod spec and
-  # the sidecar's target can never disagree about which port speaks gRPC.
+  # listener). Sourced from execution.grpcPort, the SAME values.yaml number the container's
+  # second ports[] entry (deployment.yaml) uses, so the app's actual binding and the pod
+  # spec can never disagree about which port speaks gRPC.
+  #
+  # Deliberately NOT sourced from execution.dapr.appPort (the dapr.io/app-port annotation).
+  # That value is protocol-dependent — 5000 while dapr.protocol is "http" (the default),
+  # same as ASPNETCORE_URLS's HTTP/1.1 port below. If this key read dapr.appPort instead,
+  # the default deployment would try to bind port 5000 twice (Http1 here, Http2 there) and
+  # crash-loop at startup with an address-in-use error the moment the pod started — this
+  # regressed once already; do not reintroduce the coupling.
   #
   # The HTTP/1.1 port is deliberately NOT declared here as a matching "Kestrel__HttpPort".
   # ASPNETCORE_URLS (set above by vnext.commonEnvVars) already declares it, and Execution's
@@ -52,7 +59,7 @@ data:
   # does — the Service would point at a port the app never binds. A "Kestrel__HttpPort" key
   # here would be a second, and equally disconnected, source of truth for that same port. Do
   # not reintroduce it.
-  Kestrel__GrpcPort: {{ .Values.execution.dapr.appPort | quote }}
+  Kestrel__GrpcPort: {{ .Values.execution.grpcPort | quote }}
 
   # Component-specific environment variables
   {{- if .Values.execution.extraEnvConfig }}

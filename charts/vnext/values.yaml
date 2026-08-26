@@ -615,6 +615,26 @@ execution:
   # Override global settings if needed
   imagePullSecrets: []
   
+  # The port Execution's own Kestrel process listens on for its second, gRPC-only h2c
+  # endpoint (the proxy-mode TaskInvoker service) — see the Kestrel comment in
+  # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs in the vnext runtime repo.
+  #
+  # Deliberately NOT a Dapr setting and NOT reused from dapr.appPort below: this is "what
+  # port the app process binds", a fact about the app that holds regardless of whether
+  # the sidecar is pointed at it. dapr.appPort is a DIFFERENT fact — "what port the
+  # sidecar dials" — and must equal execution.service.port (5000) while dapr.protocol is
+  # "http", or this value while dapr.protocol is "grpc". Collapsing the two into one
+  # value is exactly the bug this comment exists to prevent: with dapr.protocol "http"
+  # (the default), dapr.appPort is 5000, the SAME as execution.service.port/
+  # ASPNETCORE_URLS's HTTP/1.1 port — if Kestrel__GrpcPort had also read dapr.appPort, the
+  # app would try to bind port 5000 twice (once Http1, once Http2) and crash-loop with an
+  # address-in-use IOException at startup. Sourced verbatim into both Kestrel__GrpcPort
+  # (configmap.yaml) and the container's second containerPort (deployment.yaml), so the
+  # app's actual gRPC listener and the pod spec can't drift apart from each other — but
+  # NEVER into dapr.appPort; that one is the operator's job to flip, see below. Matches
+  # local dev's Kestrel:GrpcPort (4212, alongside HTTP 4202 — also two distinct ports).
+  grpcPort: "5001"
+
   # Dapr specific annotations
   dapr:
     enabled: true
@@ -624,18 +644,20 @@ execution:
     # deployment must be byte-equivalent to before the gRPC proxy-mode transport existed
     # at all: HTTP/1.1 invocation, one whole trace.
     #
-    # Execution also serves a second, gRPC-only h2c Kestrel endpoint (the proxy-mode
-    # TaskInvoker service) alongside its normal HTTP/1.1 endpoint — see the Kestrel
-    # comment in execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs in the vnext
-    # runtime repo. The gRPC containerPort (deployment.yaml) and Kestrel__GrpcPort
-    # (configmap.yaml) stay wired below regardless of this value — the app can serve
-    # that port harmlessly while the sidecar isn't pointed at it. This value, not those,
-    # is the actual switch.
+    # Execution also serves a second, gRPC-only h2c Kestrel endpoint on execution.grpcPort
+    # above (the proxy-mode TaskInvoker service) alongside its normal HTTP/1.1 endpoint on
+    # execution.service.port — see the Kestrel comment in
+    # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs in the vnext runtime repo.
+    # The gRPC containerPort (deployment.yaml) and Kestrel__GrpcPort (configmap.yaml) stay
+    # wired to execution.grpcPort regardless of this value — the app can serve that port
+    # harmlessly while the sidecar isn't pointed at it. This value, not those, is the
+    # actual switch.
     #
     # To enable gRPC proxy-mode invocation, set ALL of the following together — a
     # partial flip breaks every task invocation, not just tracing:
     #   1. This value: "grpc"
-    #   2. appPort below: "5001" (the gRPC port, not execution.service.port)
+    #   2. appPort below: the SAME number as execution.grpcPort above (not repeated here
+    #      so the two can't drift — read execution.grpcPort's value and copy it)
     #   3. orchestrator.appEnvConfig.ExecutionApi__Transport (below, in this same file):
     #      "grpc"
     # Known cost, disclosed here because an operator flipping this needs to see the
@@ -646,21 +668,23 @@ execution:
     # docs/runtime/dapr-invocation-transport.md in the vnext runtime repo.
     protocol: "http"
     # dapr.io/app-port — MUST be the port that protocol above actually serves, not
-    # execution.service.port. Execution binds two cleartext ports because Kestrel cannot
+    # execution.service.port and NOT execution.grpcPort verbatim (they only coincide when
+    # protocol is grpc). Execution binds two cleartext ports because Kestrel cannot
     # multiplex HTTP/1.1 (MVC controller, health probes, swagger — see service.port and
     # the probes below) and HTTP/2-only gRPC on one: there's no ALPN without TLS, and
     # Kestrel does not byte-sniff the HTTP/2 preface to auto-upgrade — it silently
     # downgrades the shared endpoint to HTTP/1.1 instead.
     #
-    # Default (this state): "5000", the HTTP/1.1 port — same as execution.service.port,
-    # so this looks like a no-op today, but it is the value the sidecar actually reads;
-    # don't treat it as redundant with service.port and drop it.
+    # Default (this state): "5000", the HTTP/1.1 port — same as execution.service.port.
+    # This is a DIFFERENT config key from execution.grpcPort above on purpose: if this
+    # value instead read execution.grpcPort's default (5001) while protocol is "http", or
+    # if Kestrel__GrpcPort read this key instead of its own, the app would try to bind the
+    # same port twice (Http1 and Http2) and crash-loop at startup with an address-in-use
+    # error — that coupling is exactly what regressed once already; do not reintroduce it.
     #
-    # When protocol above is "grpc", this MUST become "5001" (service.port + 1) —
-    # reused verbatim as the container's second containerPort (deployment.yaml) and as
-    # Kestrel__GrpcPort (configmap.yaml) so the annotation, the listener and the app
-    # config can't drift apart from three different places. Matches local dev's
-    # Kestrel:GrpcPort (4212 alongside HTTP 4202).
+    # When protocol above is "grpc", this MUST become execution.grpcPort's value (5001 by
+    # default, i.e. service.port + 1) — matches local dev's Kestrel:GrpcPort (4212
+    # alongside HTTP 4202).
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
@@ -676,9 +700,9 @@ execution:
   # HTTP/1.1 port ONLY (MVC controller, health probes, swagger). Deliberately NOT the
   # gRPC port, even when dapr.protocol above is switched to "grpc" — the K8s Service and
   # both probes below speak HTTP/1.1 and would fail against the HTTP/2-only gRPC
-  # listener. The gRPC port lives at dapr.appPort above and is exposed as a second
-  # containerPort in deployment.yaml, not through this Service (the sidecar reaches it
-  # over localhost).
+  # listener. The gRPC port lives at execution.grpcPort above (a fixed app-listener fact,
+  # independent of dapr.protocol/appPort) and is exposed as a second containerPort in
+  # deployment.yaml, not through this Service (the sidecar reaches it over localhost).
   service:
     type: ClusterIP
     port: 5000
