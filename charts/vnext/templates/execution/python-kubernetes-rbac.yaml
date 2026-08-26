@@ -1,0 +1,48 @@
+{{- if include "vnext.pythonKubernetesEnabled" . }}
+{{- $serviceAccountName := include "vnext.pythonExecutionServiceAccountName" . -}}
+{{- if .Values.execution.python.container.kubernetes.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "execution-python") | nindent 4 }}
+  {{- with .Values.execution.python.container.kubernetes.rbac.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: true
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "vnext.fullname" . }}-execution-python
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "execution-python") | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/attach"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "vnext.fullname" . }}-execution-python
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "execution-python") | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "vnext.fullname" . }}-execution-python
+{{- end }}
