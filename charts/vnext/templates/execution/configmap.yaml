@@ -39,13 +39,19 @@ data:
   # the sidecar's target can never disagree about which port speaks gRPC.
   #
   # The HTTP/1.1 port is deliberately NOT declared here as a matching "Kestrel__HttpPort".
-  # ASPNETCORE_URLS (set above by vnext.commonEnvVars, "http://+:5000") already declares it,
-  # and Execution's Program.cs now parses that value back out at startup instead of reading a
-  # bespoke key — registering the gRPC endpoint makes Kestrel discard the hosting URLs unless
-  # something explicitly re-derives an HTTP/1.1 endpoint from them. A "Kestrel__HttpPort" key
-  # here would be a second source of truth for a port the environment already declares, and it
-  # would silently win if it ever drifted from execution.service.port/ASPNETCORE_URLS. Do not
-  # reintroduce it.
+  # ASPNETCORE_URLS (set above by vnext.commonEnvVars) already declares it, and Execution's
+  # Program.cs now parses that value back out at startup instead of reading a bespoke key —
+  # registering the gRPC endpoint makes Kestrel discard the hosting URLs unless something
+  # explicitly re-derives an HTTP/1.1 endpoint from them.
+  #
+  # ASPNETCORE_URLS is NOT derived from execution.service.port — it is the hardcoded literal
+  # "http://+:5000" baked into vnext.commonEnvVars (_helpers.tpl), the same block every other
+  # .NET service includes. execution.service.port only moves the Service object and the probe
+  # target port; it does NOT move the app's actual listener. Changing execution.service.port
+  # without also touching vnext.commonEnvVars therefore does not do what it looks like it
+  # does — the Service would point at a port the app never binds. A "Kestrel__HttpPort" key
+  # here would be a second, and equally disconnected, source of truth for that same port. Do
+  # not reintroduce it.
   Kestrel__GrpcPort: {{ .Values.execution.dapr.appPort | quote }}
 
   # Component-specific environment variables
