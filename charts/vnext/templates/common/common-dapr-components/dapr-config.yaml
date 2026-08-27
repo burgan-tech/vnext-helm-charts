@@ -27,4 +27,10 @@ spec:
       # only `grpc` or `http`; the .NET side spells the HTTP option `http/protobuf`, hence the
       # mapping instead of a passthrough.
       protocol: {{ if hasPrefix "http" .Values.global.telemetry.protocol }}http{{ else }}grpc{{ end }}
-    samplingRate: "1"
+    # Parameterised so an environment can dial sidecar-rooted tracing down without a chart
+    # edit. Default "1". See global.telemetry.samplingRate for what this actually affects —
+    # Dapr's sampler is ParentBased, so this governs only traces the sidecar itself roots.
+    # `default` is deliberately NOT used here: Go templates treat 0 as empty, so
+    # `| default "1"` silently turns a deliberate samplingRate=0 (tracing off) back into
+    # full sampling. Nil is detected explicitly instead, which leaves 0 meaning 0.
+    samplingRate: {{ if kindIs "invalid" .Values.global.telemetry.samplingRate }}"1"{{ else }}{{ .Values.global.telemetry.samplingRate | quote }}{{ end }}

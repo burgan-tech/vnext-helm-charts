@@ -206,6 +206,29 @@ global:
       endpoint: ""
     # Protocol for telemetry export (grpc or http/protobuf)
     protocol: "grpc"
+    # Dapr sidecar trace sampling, 0..1, rendered into the appconfig Configuration's
+    # spec.tracing.samplingRate. "0" disables sidecar tracing outright.
+    #
+    # Lowering this does LESS than it looks like, and the reason is worth knowing before
+    # you touch it. Dapr builds its sampler as ParentBased(TraceIDRatioBased(rate)), so the
+    # ratio applies ONLY to traces the sidecar itself roots; whenever an incoming
+    # traceparent already carries a sampling decision, Dapr honours that decision and
+    # ignores this value. In vNext the root is almost always the APP — a client request
+    # enters the orchestrator over plain HTTP, never through Dapr — and the app runs
+    # OpenTelemetry's default ParentBased(AlwaysOn) sampler, so business traces stay at
+    # 100% no matter what is set here.
+    #
+    # What this DOES cut is sidecar-rooted traffic: Dapr scheduler job callbacks
+    # (POST /job/{jobName}) and pub/sub deliveries that arrive without trace context.
+    # That makes it a reasonable lever for background noise and a useless one for overall
+    # volume — for that you would have to set a sampler on the app side, which the Aether
+    # telemetry options do not currently expose.
+    #
+    # Safe to lower: because the sampler is ParentBased and Dapr still propagates
+    # traceparent with flags=00 when it declines, a trace is either wholly sampled or
+    # wholly absent. It cannot produce the half-sampled, orphan-span traces that a
+    # mismatched app/sidecar decision would.
+    samplingRate: "1"
 
   
   # -----------------------------------------------------------------------------
