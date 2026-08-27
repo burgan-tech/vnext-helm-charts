@@ -156,7 +156,30 @@ global:
   dapr:
     # Enable or disable Dapr sidecar injection globally
     enabled: true
-    # Communication protocol between app and Dapr sidecar (http or grpc)
+    # Protocol the SIDECAR uses to call THE APP (dapr.io/app-protocol) — the inbound
+    # direction only: service-invocation delivery, pub/sub delivery, job callbacks.
+    #
+    # This is NOT how the app calls its sidecar. That direction is chosen by the SDK method
+    # the code calls (DaprClient's InvokeMethodAsync family is HTTP, InvokeMethodGrpcAsync is
+    # gRPC) and no Helm value can change it. Sidecar-to-sidecar is always gRPC regardless.
+    #
+    # This value is a real fallback, not decoration: vnext.daprAnnotations (_helpers.tpl)
+    # resolves each component's app-protocol as `<component>.dapr.protocol | default
+    # global.dapr.protocol | default "http"`. Before the Task 7 execution-gRPC change, no
+    # component set its own dapr.protocol, so this key rendered nowhere and every component
+    # silently took the helper's bare "http" literal instead — changing it here would have
+    # done nothing. Wired as the real fallback so it now actually governs anything that
+    # doesn't override it.
+    #
+    # MUST stay "http". Setting "grpc" HERE flips every component that doesn't set its own
+    # dapr.protocol — orchestrator, both workers, db-migrator (annotation currently
+    # suppressed for db-migrator specifically, see vnext.daprAnnotations) — over to the Dapr
+    # AppCallback gRPC service, which none of them implement: they expose the HTTP surface
+    # (UseCloudEvents + MapSubscribeHandler + MVC controllers) and register no gRPC service.
+    # The switch fails closed on nothing: it silently breaks every inbound path at once.
+    #
+    # execution is the ONE deliberate exception, and it overrides locally rather than here:
+    # see execution.dapr.protocol below for why, and what it costs.
     protocol: "http"
     # Dapr placement service endpoint for actor placement
     placementHost: "dapr-placement:50005"
@@ -183,6 +206,29 @@ global:
       endpoint: ""
     # Protocol for telemetry export (grpc or http/protobuf)
     protocol: "grpc"
+    # Dapr sidecar trace sampling, 0..1, rendered into the appconfig Configuration's
+    # spec.tracing.samplingRate. "0" disables sidecar tracing outright.
+    #
+    # Lowering this does LESS than it looks like, and the reason is worth knowing before
+    # you touch it. Dapr builds its sampler as ParentBased(TraceIDRatioBased(rate)), so the
+    # ratio applies ONLY to traces the sidecar itself roots; whenever an incoming
+    # traceparent already carries a sampling decision, Dapr honours that decision and
+    # ignores this value. In vNext the root is almost always the APP — a client request
+    # enters the orchestrator over plain HTTP, never through Dapr — and the app runs
+    # OpenTelemetry's default ParentBased(AlwaysOn) sampler, so business traces stay at
+    # 100% no matter what is set here.
+    #
+    # What this DOES cut is sidecar-rooted traffic: Dapr scheduler job callbacks
+    # (POST /job/{jobName}) and pub/sub deliveries that arrive without trace context.
+    # That makes it a reasonable lever for background noise and a useless one for overall
+    # volume — for that you would have to set a sampler on the app side, which the Aether
+    # telemetry options do not currently expose.
+    #
+    # Safe to lower: because the sampler is ParentBased and Dapr still propagates
+    # traceparent with flags=00 when it declines, a trace is either wholly sampled or
+    # wholly absent. It cannot produce the half-sampled, orphan-span traces that a
+    # mismatched app/sidecar decision would.
+    samplingRate: "1"
 
   
   # -----------------------------------------------------------------------------
@@ -472,6 +518,13 @@ orchestrator:
     Logging__LogLevel__Default: "Debug"
     # Base path for URL templates (empty = no base path)
     UrlTemplates__BasePath: ""
+    # Transport the orchestrator's client uses to invoke Execution for task processing:
+    # "http" (default) or "grpc" (Dapr proxy-mode). MUST move together with
+    # execution.dapr.protocol (and execution.dapr.appPort when going to "grpc") — see
+    # the comments there. Changing only one of the two sides breaks every task
+    # invocation, not just tracing. Defaulted to "http" so the default deployment is
+    # byte-equivalent to before gRPC proxy-mode transport existed: one whole trace.
+    ExecutionApi__Transport: "http"
 
   # ---------------------------------------------------------------------------
   # Plugins
@@ -585,11 +638,76 @@ execution:
   # Override global settings if needed
   imagePullSecrets: []
   
+  # The port Execution's own Kestrel process listens on for its second, gRPC-only h2c
+  # endpoint (the proxy-mode TaskInvoker service) — see the Kestrel comment in
+  # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs in the vnext runtime repo.
+  #
+  # Deliberately NOT a Dapr setting and NOT reused from dapr.appPort below: this is "what
+  # port the app process binds", a fact about the app that holds regardless of whether
+  # the sidecar is pointed at it. dapr.appPort is a DIFFERENT fact — "what port the
+  # sidecar dials" — and must equal execution.service.port (5000) while dapr.protocol is
+  # "http", or this value while dapr.protocol is "grpc". Collapsing the two into one
+  # value is exactly the bug this comment exists to prevent: with dapr.protocol "http"
+  # (the default), dapr.appPort is 5000, the SAME as execution.service.port/
+  # ASPNETCORE_URLS's HTTP/1.1 port — if Kestrel__GrpcPort had also read dapr.appPort, the
+  # app would try to bind port 5000 twice (once Http1, once Http2) and crash-loop with an
+  # address-in-use IOException at startup. Sourced verbatim into both Kestrel__GrpcPort
+  # (configmap.yaml) and the container's second containerPort (deployment.yaml), so the
+  # app's actual gRPC listener and the pod spec can't drift apart from each other — but
+  # NEVER into dapr.appPort; that one is the operator's job to flip, see below. Matches
+  # local dev's Kestrel:GrpcPort (4212, alongside HTTP 4202 — also two distinct ports).
+  grpcPort: "5001"
+
   # Dapr specific annotations
   dapr:
     enabled: true
     # appId doesn't exist in the values.yaml file, it is generated by the chart
     appId: ""
+    # Default (this state): "http", matching global.dapr.protocol — the default
+    # deployment must be byte-equivalent to before the gRPC proxy-mode transport existed
+    # at all: HTTP/1.1 invocation, one whole trace.
+    #
+    # Execution also serves a second, gRPC-only h2c Kestrel endpoint on execution.grpcPort
+    # above (the proxy-mode TaskInvoker service) alongside its normal HTTP/1.1 endpoint on
+    # execution.service.port — see the Kestrel comment in
+    # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs in the vnext runtime repo.
+    # The gRPC containerPort (deployment.yaml) and Kestrel__GrpcPort (configmap.yaml) stay
+    # wired to execution.grpcPort regardless of this value — the app can serve that port
+    # harmlessly while the sidecar isn't pointed at it. This value, not those, is the
+    # actual switch.
+    #
+    # To enable gRPC proxy-mode invocation, set ALL of the following together — a
+    # partial flip breaks every task invocation, not just tracing:
+    #   1. This value: "grpc"
+    #   2. appPort below: the SAME number as execution.grpcPort above (not repeated here
+    #      so the two can't drift — read execution.grpcPort's value and copy it)
+    #   3. orchestrator.appEnvConfig.ExecutionApi__Transport (below, in this same file):
+    #      "grpc"
+    # Known cost, disclosed here because an operator flipping this needs to see the
+    # trade at the value, not go find it: enabling gRPC proxy mode currently BREAKS
+    # distributed trace continuity. Dapr's AppCallback hop delivers a duplicated,
+    # W3C-invalid `traceparent`, so Execution roots a fresh trace instead of continuing
+    # the caller's — each invocation produces two disconnected traces, not one. See
+    # docs/runtime/dapr-invocation-transport.md in the vnext runtime repo.
+    protocol: "http"
+    # dapr.io/app-port — MUST be the port that protocol above actually serves, not
+    # execution.service.port and NOT execution.grpcPort verbatim (they only coincide when
+    # protocol is grpc). Execution binds two cleartext ports because Kestrel cannot
+    # multiplex HTTP/1.1 (MVC controller, health probes, swagger — see service.port and
+    # the probes below) and HTTP/2-only gRPC on one: there's no ALPN without TLS, and
+    # Kestrel does not byte-sniff the HTTP/2 preface to auto-upgrade — it silently
+    # downgrades the shared endpoint to HTTP/1.1 instead.
+    #
+    # Default (this state): "5000", the HTTP/1.1 port — same as execution.service.port.
+    # This is a DIFFERENT config key from execution.grpcPort above on purpose: if this
+    # value instead read execution.grpcPort's default (5001) while protocol is "http", or
+    # if Kestrel__GrpcPort read this key instead of its own, the app would try to bind the
+    # same port twice (Http1 and Http2) and crash-loop at startup with an address-in-use
+    # error — that coupling is exactly what regressed once already; do not reintroduce it.
+    #
+    # When protocol above is "grpc", this MUST become execution.grpcPort's value (5001 by
+    # default, i.e. service.port + 1) — matches local dev's Kestrel:GrpcPort (4212
+    # alongside HTTP 4202).
     appPort: "5000"
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
@@ -602,19 +720,26 @@ execution:
   # Use global securityContext, override if needed
   securityContext: {}
   
+  # HTTP/1.1 port ONLY (MVC controller, health probes, swagger). Deliberately NOT the
+  # gRPC port, even when dapr.protocol above is switched to "grpc" — the K8s Service and
+  # both probes below speak HTTP/1.1 and would fail against the HTTP/2-only gRPC
+  # listener. The gRPC port lives at execution.grpcPort above (a fixed app-listener fact,
+  # independent of dapr.protocol/appPort) and is exposed as a second containerPort in
+  # deployment.yaml, not through this Service (the sidecar reaches it over localhost).
   service:
     type: ClusterIP
     port: 5000
-  
+
   # Uses global.resources.default if empty
   resources: {}
-  
-  # Health check probes (uses global.probes if not specified)
+
+  # Health check probes (uses global.probes if not specified). MUST stay on the "http"
+  # named port (service.port) — probes speak HTTP/1.1 and the gRPC port is HTTP/2-only.
   livenessProbe:
     httpGet:
       path: /live
       port: http
-  
+
   readinessProbe:
     httpGet:
       path: /ready
