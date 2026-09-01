@@ -187,9 +187,14 @@ global:
     httpPort: "42110"
     # gRPC port for Dapr sidecar API
     grpcPort: "42111"
-    # Maximum HTTP request body size for Dapr sidecar in MB (Dapr default: 4).
-    # Increase when large document payloads cause HTTP 499 on the sidecar.
-    httpMaxRequestSize: "64"
+    # Maximum request body size for the Dapr sidecar, as a resource quantity
+    # (emitted as dapr.io/max-body-size; Dapr >= 1.13). Must agree with the app's
+    # Kestrel/gRPC limits and the orchestration-side gRPC channel (64 MB there).
+    maxBodySize: "64Mi"
+    # LEGACY (Dapr < 1.13): integer MB emitted as dapr.io/http-max-request-size.
+    # Deprecated upstream; empty = not emitted. Set only for environments pinned
+    # to an old sidecar.
+    httpMaxRequestSize: ""
   
   # -----------------------------------------------------------------------------
   # OpenTelemetry Configuration
@@ -423,6 +428,8 @@ orchestrator:
     appId: ""
     # Port that the application listens on
     appPort: "5000"
+    # Override global.dapr.maxBodySize for this component. Empty = use global.
+    maxBodySize: ""
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
 
@@ -713,6 +720,8 @@ execution:
     # default, i.e. service.port + 1) — matches local dev's Kestrel:GrpcPort (4212
     # alongside HTTP 4202).
     appPort: "5000"
+    # Override global.dapr.maxBodySize for this component. Empty = use global.
+    maxBodySize: ""
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
 
@@ -812,6 +821,8 @@ worker-inbox:
     appId: ""
     # Port that the application listens on
     appPort: "5000"
+    # Override global.dapr.maxBodySize for this component. Empty = use global.
+    maxBodySize: ""
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
 
@@ -922,6 +933,8 @@ worker-outbox:
     appId: ""
     # Port that the application listens on
     appPort: "5000"
+    # Override global.dapr.maxBodySize for this component. Empty = use global.
+    maxBodySize: ""
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
     httpMaxRequestSize: ""
 

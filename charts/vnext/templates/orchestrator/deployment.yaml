@@ -19,7 +19,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "httpMaxRequestSize" (coalesce .Values.orchestrator.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "maxBodySize" (coalesce .Values.orchestrator.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.orchestrator.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
         {{- with .Values.orchestrator.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

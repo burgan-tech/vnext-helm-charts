@@ -153,6 +153,12 @@ dapr.io/app-port: {{ .dapr.appPort | quote }}
      that don't pass "globalProtocol" still land on "http" via the final default. */}}
 dapr.io/app-protocol: {{ .dapr.protocol | default .globalProtocol | default "http" | quote }}
 {{- end }}
+{{/* Preferred body-size annotation (Dapr >= 1.13, resource-quantity string e.g. "64Mi").
+     The legacy MB-integer annotation below is deprecated but still emitted when a user
+     sets httpMaxRequestSize explicitly — e.g. an environment pinned to an old sidecar. */}}
+{{- if .maxBodySize }}
+dapr.io/max-body-size: {{ .maxBodySize | quote }}
+{{- end }}
 {{- if .httpMaxRequestSize }}
 dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}
 {{- end }}
