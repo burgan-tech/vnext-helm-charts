@@ -195,26 +195,14 @@ global:
     # Deprecated upstream; empty = not emitted. Set only for environments pinned
     # to an old sidecar.
     httpMaxRequestSize: ""
-    # Dapr sidecar (daprd) container sizing, emitted as the dapr.io/sidecar-* annotations
-    # on every dapr-enabled pod. Without these the sidecar runs BestEffort (cpu.shares=2)
-    # and is the last thing scheduled under node pressure — the primary suspect in the
-    # intprod 40 ms sidecar->app latency finding. Measured usage: 1.5-5.4m CPU, 44-72Mi.
-    # NOTE: if an environment's podAnnotations also set these keys, remove them there —
-    # duplicate annotation keys in one manifest resolve unpredictably (last-parser-wins).
-    sidecarResources:
-      cpuRequest: "50m"
-      cpuLimit: "200m"
-      memoryRequest: "128Mi"
-      memoryLimit: "256Mi"
-    # Sidecar graceful shutdown window. The injector expects an INTEGER second count
-    # ("20") — a duration string like "20s" fails to parse and silently falls back to
-    # the injector default. Emitted as dapr.io/graceful-shutdown-seconds.
-    gracefulShutdownSeconds: "20"
-    # How long the sidecar keeps serving before starting graceful shutdown — a Go
-    # DURATION string ("30s"), unlike the integer above. Emitted as
-    # dapr.io/block-shutdown-duration. block + graceful (30s + 20s = 50s) must fit inside
-    # the pod's terminationGracePeriodSeconds — see global.terminationGracePeriodSeconds.
-    blockShutdownDuration: "30s"
+    # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
+    # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
+    # dapr.io/graceful-shutdown-seconds (INTEGER, e.g. "20" — "20s" fails to parse) and
+    # dapr.io/block-shutdown-duration (Go duration, e.g. "30s") through each component's
+    # podAnnotations in the environment values file. Do give daprd resources there — a
+    # BestEffort sidecar (cpu.shares=2) was the primary suspect in the intprod 40 ms
+    # sidecar->app latency finding (measured daprd usage: 1.5-5.4m CPU, 44-72Mi). Keep
+    # block + graceful within global.terminationGracePeriodSeconds.
   
   # -----------------------------------------------------------------------------
   # OpenTelemetry Configuration

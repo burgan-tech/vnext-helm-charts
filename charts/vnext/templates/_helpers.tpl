@@ -171,32 +171,14 @@ dapr.io/max-body-size: {{ .maxBodySize | quote }}
 {{- if .httpMaxRequestSize }}
 dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}
 {{- end }}
-{{/* Sidecar container sizing + shutdown behavior, driven by global.dapr (passed as
-     "globalDapr" — callers that don't pass it simply emit none of these). Formats differ
-     on purpose: graceful-shutdown-seconds is an INTEGER second count, block-shutdown-
-     duration is a Go duration string — see the values.yaml comments. */}}
-{{- with .globalDapr }}
-{{- with .sidecarResources }}
-{{- if .cpuRequest }}
-dapr.io/sidecar-cpu-request: {{ .cpuRequest | quote }}
-{{- end }}
-{{- if .cpuLimit }}
-dapr.io/sidecar-cpu-limit: {{ .cpuLimit | quote }}
-{{- end }}
-{{- if .memoryRequest }}
-dapr.io/sidecar-memory-request: {{ .memoryRequest | quote }}
-{{- end }}
-{{- if .memoryLimit }}
-dapr.io/sidecar-memory-limit: {{ .memoryLimit | quote }}
-{{- end }}
-{{- end }}
-{{- if .gracefulShutdownSeconds }}
-dapr.io/graceful-shutdown-seconds: {{ .gracefulShutdownSeconds | quote }}
-{{- end }}
-{{- if .blockShutdownDuration }}
-dapr.io/block-shutdown-duration: {{ .blockShutdownDuration | quote }}
-{{- end }}
-{{- end }}
+{{/* Sidecar container sizing (dapr.io/sidecar-*) and shutdown behavior
+     (graceful-shutdown-seconds / block-shutdown-duration) are deliberately NOT emitted by
+     the chart: environments supply them through <component>.podAnnotations, which is
+     flexible and avoids duplicate annotation keys against user values. Format reminders
+     for those values files: graceful-shutdown-seconds is an INTEGER second count ("20" —
+     a duration like "20s" fails to parse), block-shutdown-duration is a Go DURATION
+     string ("30s"), and their sum must fit inside the pod's terminationGracePeriodSeconds
+     (see global.terminationGracePeriodSeconds). */}}
 {{- end }}
 {{- end }}
 
