@@ -261,19 +261,17 @@ global:
   
   # -----------------------------------------------------------------------------
   # Resource Defaults
-  # Default resource limits and requests applied to all services
-  # Individual services can override these values
+  # Sizing precedence for every component rendered through the vnext.resources helper:
+  #   1. <component>.resources        — when NON-EMPTY, always wins
+  #   2. global.resources.default     — when set (e.g. from an environment values file),
+  #                                     sizes every component whose resources is empty
+  #   3. <component>.resourcesFallback — chart-shipped measured defaults, used only when
+  #                                     neither of the above is set
+  # EMPTY here on purpose: setting a chart-level value would permanently shadow the
+  # per-component measured fallbacks (an env cannot clear a non-empty chart map).
   # -----------------------------------------------------------------------------
   resources:
-    default:
-      # Maximum resources a container can use
-      limits:
-        cpu: 1000m      # 1 CPU core
-        memory: 2Gi     # 1 gigabyte of RAM
-      # Guaranteed resources for a container
-      requests:
-        cpu: 100m       # 0.1 CPU core
-        memory: 256Mi   # 256 megabytes of RAM
+    default: {}
   
   # -----------------------------------------------------------------------------
   # Health Probe Defaults
@@ -471,10 +469,16 @@ orchestrator:
     #         - orchestrator.example.com
     tls: []
   
-  # Measured (bmprod, 2026-08-31): steady RSS 440-475Mi, idle CPU ~1m. Requests sized to
-  # actual steady-state so the scheduler and cpu.shares reflect reality; CPU limit 2 (not 1)
-  # keeps .NET Server GC enabled (ProcessorCount >= 2). Limits do not reserve node capacity.
-  resources:
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
+  resources: {}
+
+  # Chart-managed measured default (bmprod, 2026-08-31): steady RSS 440-475Mi, idle CPU ~1m.
+  # Requests sized to actual steady-state so the scheduler and cpu.shares reflect reality;
+  # CPU limit 2 (not 1) keeps .NET Server GC enabled (ProcessorCount >= 2). Limits do not
+  # reserve node capacity. Do not edit from an environment — use resources or
+  # global.resources.default instead.
+  resourcesFallback:
     limits:
       cpu: 2000m
       memory: 2Gi
@@ -743,9 +747,14 @@ execution:
     type: ClusterIP
     port: 5000
 
-  # Measured: RSS 82-100Mi idle; latency-critical (task invocation path). CPU limit 2 keeps
-  # Server GC; memory limit 2Gi leaves headroom for 64Mi payloads in flight.
-  resources:
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
+  resources: {}
+
+  # Chart-managed measured default: RSS 82-100Mi idle; latency-critical (task invocation
+  # path). CPU limit 2 keeps Server GC; memory limit 2Gi leaves headroom for 64Mi payloads
+  # in flight. Do not edit from an environment — use resources or global.resources.default.
+  resourcesFallback:
     limits:
       cpu: 2000m
       memory: 2Gi
@@ -845,8 +854,13 @@ worker-inbox:
     type: ClusterIP
     port: 5000
 
-  # Measured: RSS 117-129Mi; background processing, not client-facing.
-  resources:
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
+  resources: {}
+
+  # Chart-managed measured default: RSS 117-129Mi; background processing, not client-facing.
+  # Do not edit from an environment — use resources or global.resources.default instead.
+  resourcesFallback:
     limits:
       cpu: 1000m
       memory: 1Gi
@@ -956,8 +970,13 @@ worker-outbox:
     type: ClusterIP
     port: 5000
 
-  # Measured: RSS 117-129Mi; background processing, not client-facing.
-  resources:
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
+  resources: {}
+
+  # Chart-managed measured default: RSS 117-129Mi; background processing, not client-facing.
+  # Do not edit from an environment — use resources or global.resources.default instead.
+  resourcesFallback:
     limits:
       cpu: 1000m
       memory: 1Gi
@@ -1065,8 +1084,19 @@ mcpServer:
             pathType: ImplementationSpecific
     tls: []
 
-  # Uses global.resources.default if empty
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
   resources: {}
+
+  # Chart-managed default (the chart's former global default). Do not edit from an
+  # environment — use resources or global.resources.default instead.
+  resourcesFallback:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
 
   autoscaling:
     enabled: false
@@ -1129,8 +1159,19 @@ db-migrator:
     dapr.io/config: appconfig
   podLabels: {}
 
-  # Uses global.resources.default if empty
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
   resources: {}
+
+  # Chart-managed default (the chart's former global default). Do not edit from an
+  # environment — use resources or global.resources.default instead.
+  resourcesFallback:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
   
   # Application-specific configuration
   # These environment variables configure the vNext application behavior

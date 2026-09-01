@@ -1,12 +1,28 @@
 # Resource & Scheduling Defaults — Rationale and Environment Overrides
 
-## What the chart defaults are (since chart > 1.0.103)
+## Sizing precedence (since chart > 1.0.104)
+
+Every component rendered through the `vnext.resources` helper is sized by the first
+non-empty source in this order:
+
+1. `<component>.resources` — an explicit block always wins.
+2. `global.resources.default` — one knob (typically set in an environment values file)
+   that sizes every component whose `resources` is empty.
+3. `<component>.resourcesFallback` — the chart-shipped measured defaults below. Applies
+   only when neither of the above is set. Chart-managed: do not edit from an environment.
+
+So an environment that sets `global.resources.default` and leaves `resources: {}` gets
+its own sizing on all of these components; delete the global to fall back to the measured
+defaults.
+
+## What the measured fallbacks are
 
 | Component | requests | limits | Why |
 |---|---|---|---|
 | orchestrator | 200m / 512Mi | 2 CPU / 2Gi | Steady RSS measured 440-475Mi; CPU limit >= 2 keeps .NET Server GC enabled |
 | execution | 100m / 256Mi | 2 CPU / 2Gi | Latency-critical invoke path; headroom for 64Mi payloads |
 | worker-inbox / worker-outbox | 75m / 256Mi | 1 CPU / 1Gi | Background processing |
+| mcp-server / db-migrator | 100m / 256Mi | 1 CPU / 2Gi | The chart's former global default |
 
 Anti-affinity: each of these components ships a default *preferred* podAntiAffinity
 (hostname topology). Override wholesale via `<component>.affinity`.
@@ -17,11 +33,14 @@ deprecated `dapr.io/http-max-request-size` is emitted only if you set
 that relied on the old chart default `httpMaxRequestSize: "64"` must now set it
 explicitly, or the sidecar falls back to its 4MB default.
 
-## IMPORTANT: environments override these defaults
+## Version note
 
-- After upgrading past 1.0.103, the four components ADOPT the chart tiers automatically even in environments that set `global.resources.default` and left `<component>.resources: {}` — an empty map cannot clear a non-empty chart default (Helm map-merge).
-- To keep an environment on its own sizing for a component, set an explicit `<component>.resources` block in the env file (it masks the chart tier), or set `<component>.resources: null` to fall back to that environment's `global.resources.default`.
-- `global.resources.default` continues to apply only to components without explicit chart-level blocks (mcp-server, initializer, db-migrator).
+Chart 1.0.104 briefly shipped the measured tiers directly in each component's
+`resources` key. That made them unoverridable from an environment's
+`global.resources.default` (Helm map-merge: `resources: {}` cannot clear a non-empty
+chart default). The tiers were therefore moved to `resourcesFallback` keys, restoring
+the empty-means-global contract described above. The orchestrator-initializer job sets
+no resources at all (neither a chart block nor the global default applies to it).
 
 ## Known gap (deliberate, 2026-09-01 decision)
 

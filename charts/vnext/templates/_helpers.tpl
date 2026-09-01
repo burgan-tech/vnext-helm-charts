@@ -121,10 +121,19 @@ Merge global and component resources
 Usage: {{ include "vnext.resources" (dict "component" .Values.orchestrator "global" .Values.global) }}
 */}}
 {{- define "vnext.resources" -}}
+{{/* Precedence: (1) the component's own resources when NON-EMPTY, (2) global.resources.default
+     when set (typically by an environment values file — one knob sizing every component whose
+     resources is empty), (3) the component's chart-shipped resourcesFallback (the measured
+     defaults). The fallback lives in its own key precisely so an environment's
+     global.resources.default can win over it: Helm map-merge cannot clear a non-empty chart
+     default with `resources: {}`, which is what made the previous shape (tiers directly in
+     `resources`) unoverridable from an env global. */}}
 {{- if .component.resources -}}
 {{- toYaml .component.resources -}}
 {{- else if .global.resources.default -}}
 {{- toYaml .global.resources.default -}}
+{{- else if .component.resourcesFallback -}}
+{{- toYaml .component.resourcesFallback -}}
 {{- end -}}
 {{- end }}
 
