@@ -13,15 +13,15 @@ Anti-affinity: each of these components ships a default *preferred* podAntiAffin
 
 Body size: `global.dapr.maxBodySize: "64Mi"` emits `dapr.io/max-body-size`. The
 deprecated `dapr.io/http-max-request-size` is emitted only if you set
-`global.dapr.httpMaxRequestSize` explicitly.
+`global.dapr.httpMaxRequestSize` explicitly. Environments pinned to Dapr < 1.13
+that relied on the old chart default `httpMaxRequestSize: "64"` must now set it
+explicitly, or the sidecar falls back to its 4MB default.
 
 ## IMPORTANT: environments override these defaults
 
-An environment values file that sets `global.resources.default` and leaves
-`<component>.resources: {}` will IGNORE the tiered defaults above (component-empty
-falls back to the ENVIRONMENT's global default). To adopt the tiers in an
-environment, either delete the env's `global.resources.default` override or copy the
-per-component blocks into the env file.
+- After upgrading past 1.0.103, the four components ADOPT the chart tiers automatically even in environments that set `global.resources.default` and left `<component>.resources: {}` — an empty map cannot clear a non-empty chart default (Helm map-merge).
+- To keep an environment on its own sizing for a component, set an explicit `<component>.resources` block in the env file (it masks the chart tier), or set `<component>.resources: null` to fall back to that environment's `global.resources.default`.
+- `global.resources.default` continues to apply only to components without explicit chart-level blocks (mcp-server, initializer, db-migrator).
 
 ## Known gap (deliberate, 2026-09-01 decision)
 
