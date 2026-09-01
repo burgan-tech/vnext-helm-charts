@@ -514,6 +514,26 @@ Usage: {{ include "vnext.plugins.volumeMount" . | nindent 12 }}
 {{- end -}}
 
 {{/*
+Default preferred pod anti-affinity for a scalable component: spread the component's
+replicas across nodes. preferred (not required) so a small cluster can still schedule
+more replicas than nodes; weight 100 so the scheduler treats it as the dominant soft
+rule. Rendered ONLY when the component's .affinity value is empty — a non-empty
+<component>.affinity replaces this wholesale (no merge), same contract as every other
+value-driven block in these deployments.
+Usage: {{ include "vnext.defaultPodAntiAffinity" (dict "context" . "component" "orchestrator") }}
+*/}}
+{{- define "vnext.defaultPodAntiAffinity" -}}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            {{- include "vnext.componentSelectorLabels" (dict "context" .context "component" .component) | nindent 12 }}
+{{- end -}}
+
+{{/*
 Token env vars for the plugin-fetcher Job. Each repo's token comes from the
 resolved secret (per-repo existingSecret -> defaultAuth -> generated inline
 secret) and never appears in the rendered manifest as plaintext.

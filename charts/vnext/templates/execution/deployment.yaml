@@ -103,9 +103,12 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.execution.affinity }}
+      {{- if .Values.execution.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.execution.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        {{- include "vnext.defaultPodAntiAffinity" (dict "context" . "component" "execution") | nindent 8 }}
       {{- end }}
       {{- with .Values.execution.tolerations }}
       tolerations:

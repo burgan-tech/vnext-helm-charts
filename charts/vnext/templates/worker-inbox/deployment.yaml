@@ -90,9 +90,12 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with $workerInbox.affinity }}
+      {{- if $workerInbox.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml $workerInbox.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        {{- include "vnext.defaultPodAntiAffinity" (dict "context" . "component" "worker-inbox") | nindent 8 }}
       {{- end }}
       {{- with $workerInbox.tolerations }}
       tolerations:

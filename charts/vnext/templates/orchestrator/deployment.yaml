@@ -93,9 +93,12 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.orchestrator.affinity }}
+      {{- if .Values.orchestrator.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.orchestrator.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        {{- include "vnext.defaultPodAntiAffinity" (dict "context" . "component" "orchestrator") | nindent 8 }}
       {{- end }}
       {{- with .Values.orchestrator.tolerations }}
       tolerations:

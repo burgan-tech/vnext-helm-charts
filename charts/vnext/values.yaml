@@ -497,6 +497,10 @@ orchestrator:
   volumeMounts: []
   nodeSelector: {}
   tolerations: []
+  # Pod scheduling affinity. EMPTY ({}) = the chart applies a default preferred
+  # podAntiAffinity that spreads this component's replicas across nodes
+  # (topologyKey kubernetes.io/hostname, weight 100). Set any non-empty value to
+  # REPLACE that default wholesale (no merge).
   affinity: {}
   
   # Additional custom environment variables
@@ -756,6 +760,10 @@ execution:
   volumeMounts: []
   nodeSelector: {}
   tolerations: []
+  # Pod scheduling affinity. EMPTY ({}) = the chart applies a default preferred
+  # podAntiAffinity that spreads this component's replicas across nodes
+  # (topologyKey kubernetes.io/hostname, weight 100). Set any non-empty value to
+  # REPLACE that default wholesale (no merge).
   affinity: {}
 
   # Additional environment variables for the execution service
@@ -851,6 +859,10 @@ worker-inbox:
   volumeMounts: []
   nodeSelector: {}
   tolerations: []
+  # Pod scheduling affinity. EMPTY ({}) = the chart applies a default preferred
+  # podAntiAffinity that spreads this component's replicas across nodes
+  # (topologyKey kubernetes.io/hostname, weight 100). Set any non-empty value to
+  # REPLACE that default wholesale (no merge).
   affinity: {}
   
   # Additional custom environment variables
@@ -950,6 +962,10 @@ worker-outbox:
   volumeMounts: []
   nodeSelector: {}
   tolerations: []
+  # Pod scheduling affinity. EMPTY ({}) = the chart applies a default preferred
+  # podAntiAffinity that spreads this component's replicas across nodes
+  # (topologyKey kubernetes.io/hostname, weight 100). Set any non-empty value to
+  # REPLACE that default wholesale (no merge).
   affinity: {}
   
   # Additional custom environment variables
