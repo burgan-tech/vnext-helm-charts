@@ -471,16 +471,16 @@ orchestrator:
     #         - orchestrator.example.com
     tls: []
   
-  # Uses global.resources.default if empty
-  resources: 
+  # Measured (bmprod, 2026-08-31): steady RSS 440-475Mi, idle CPU ~1m. Requests sized to
+  # actual steady-state so the scheduler and cpu.shares reflect reality; CPU limit 2 (not 1)
+  # keeps .NET Server GC enabled (ProcessorCount >= 2). Limits do not reserve node capacity.
+  resources:
     limits:
-      cpu: 1000m      # 1 CPU core
-      memory: 4Gi     # 1 gigabyte of RAM
-    # Guaranteed resources for a container
+      cpu: 2000m
+      memory: 2Gi
     requests:
-      cpu: 100m       # 0.1 CPU core
-      memory: 256Mi   # 256 megabytes of RAM
-
+      cpu: 200m
+      memory: 512Mi
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
@@ -743,8 +743,15 @@ execution:
     type: ClusterIP
     port: 5000
 
-  # Uses global.resources.default if empty
-  resources: {}
+  # Measured: RSS 82-100Mi idle; latency-critical (task invocation path). CPU limit 2 keeps
+  # Server GC; memory limit 2Gi leaves headroom for 64Mi payloads in flight.
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
 
   # Health check probes (uses global.probes if not specified). MUST stay on the "http"
   # named port (service.port) — probes speak HTTP/1.1 and the gRPC port is HTTP/2-only.
@@ -837,16 +844,15 @@ worker-inbox:
   service:
     type: ClusterIP
     port: 5000
-  
-  # Uses global.resources.default if empty
-  resources: 
+
+  # Measured: RSS 117-129Mi; background processing, not client-facing.
+  resources:
     limits:
-      cpu: 1000m      # 1 CPU core
-      memory: 4Gi     # 1 gigabyte of RAM
-    # Guaranteed resources for a container
+      cpu: 1000m
+      memory: 1Gi
     requests:
-      cpu: 100m       # 0.1 CPU core
-      memory: 256Mi   # 256 megabytes of RAM
+      cpu: 75m
+      memory: 256Mi
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
@@ -949,9 +955,15 @@ worker-outbox:
   service:
     type: ClusterIP
     port: 5000
-  
-  # Uses global.resources.default if empty
-  resources: {}
+
+  # Measured: RSS 117-129Mi; background processing, not client-facing.
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 75m
+      memory: 256Mi
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
