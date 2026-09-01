@@ -171,6 +171,32 @@ dapr.io/max-body-size: {{ .maxBodySize | quote }}
 {{- if .httpMaxRequestSize }}
 dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}
 {{- end }}
+{{/* Sidecar container sizing + shutdown behavior, driven by global.dapr (passed as
+     "globalDapr" — callers that don't pass it simply emit none of these). Formats differ
+     on purpose: graceful-shutdown-seconds is an INTEGER second count, block-shutdown-
+     duration is a Go duration string — see the values.yaml comments. */}}
+{{- with .globalDapr }}
+{{- with .sidecarResources }}
+{{- if .cpuRequest }}
+dapr.io/sidecar-cpu-request: {{ .cpuRequest | quote }}
+{{- end }}
+{{- if .cpuLimit }}
+dapr.io/sidecar-cpu-limit: {{ .cpuLimit | quote }}
+{{- end }}
+{{- if .memoryRequest }}
+dapr.io/sidecar-memory-request: {{ .memoryRequest | quote }}
+{{- end }}
+{{- if .memoryLimit }}
+dapr.io/sidecar-memory-limit: {{ .memoryLimit | quote }}
+{{- end }}
+{{- end }}
+{{- if .gracefulShutdownSeconds }}
+dapr.io/graceful-shutdown-seconds: {{ .gracefulShutdownSeconds | quote }}
+{{- end }}
+{{- if .blockShutdownDuration }}
+dapr.io/block-shutdown-duration: {{ .blockShutdownDuration | quote }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 

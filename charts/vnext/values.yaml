@@ -195,6 +195,26 @@ global:
     # Deprecated upstream; empty = not emitted. Set only for environments pinned
     # to an old sidecar.
     httpMaxRequestSize: ""
+    # Dapr sidecar (daprd) container sizing, emitted as the dapr.io/sidecar-* annotations
+    # on every dapr-enabled pod. Without these the sidecar runs BestEffort (cpu.shares=2)
+    # and is the last thing scheduled under node pressure — the primary suspect in the
+    # intprod 40 ms sidecar->app latency finding. Measured usage: 1.5-5.4m CPU, 44-72Mi.
+    # NOTE: if an environment's podAnnotations also set these keys, remove them there —
+    # duplicate annotation keys in one manifest resolve unpredictably (last-parser-wins).
+    sidecarResources:
+      cpuRequest: "50m"
+      cpuLimit: "200m"
+      memoryRequest: "128Mi"
+      memoryLimit: "256Mi"
+    # Sidecar graceful shutdown window. The injector expects an INTEGER second count
+    # ("20") — a duration string like "20s" fails to parse and silently falls back to
+    # the injector default. Emitted as dapr.io/graceful-shutdown-seconds.
+    gracefulShutdownSeconds: "20"
+    # How long the sidecar keeps serving before starting graceful shutdown — a Go
+    # DURATION string ("30s"), unlike the integer above. Emitted as
+    # dapr.io/block-shutdown-duration. block + graceful (30s + 20s = 50s) must fit inside
+    # the pod's terminationGracePeriodSeconds — see global.terminationGracePeriodSeconds.
+    blockShutdownDuration: "30s"
   
   # -----------------------------------------------------------------------------
   # OpenTelemetry Configuration
@@ -272,6 +292,13 @@ global:
   # -----------------------------------------------------------------------------
   resources:
     default: {}
+
+  # Pod terminationGracePeriodSeconds for the dapr-enabled app deployments
+  # (orchestrator, execution, worker-inbox, worker-outbox). Must be >= the sidecar's
+  # blockShutdownDuration + gracefulShutdownSeconds (30s + 20s = 50s with the chart
+  # defaults) or the kubelet SIGKILLs mid-shutdown; the Kubernetes default of 30s is
+  # too short for those defaults. Empty = Kubernetes default (30).
+  terminationGracePeriodSeconds: 60
   
   # -----------------------------------------------------------------------------
   # Health Probe Defaults

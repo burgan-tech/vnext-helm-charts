@@ -20,7 +20,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" $workerOutbox.dapr "enabled" .Values.global.dapr.enabled "component" "worker-outbox" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "maxBodySize" (coalesce $workerOutbox.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce $workerOutbox.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" $workerOutbox.dapr "enabled" .Values.global.dapr.enabled "component" "worker-outbox" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "maxBodySize" (coalesce $workerOutbox.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce $workerOutbox.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize) "globalDapr" .Values.global.dapr) | nindent 8 }}
         {{- with $workerOutbox.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -37,6 +37,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      {{- with .Values.global.terminationGracePeriodSeconds }}
+      {{/* Must cover the sidecar's block + graceful shutdown window — see values.yaml. */}}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with $workerOutbox.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

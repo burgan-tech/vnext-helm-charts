@@ -42,9 +42,16 @@ chart default). The tiers were therefore moved to `resourcesFallback` keys, rest
 the empty-means-global contract described above. The orchestrator-initializer job sets
 no resources at all (neither a chart block nor the global default applies to it).
 
-## Known gap (deliberate, 2026-09-01 decision)
+## Dapr sidecar sizing & shutdown (closes the former BestEffort gap)
 
-The daprd sidecar carries NO resource requests/limits (BestEffort, cpu.shares=2).
-It was the primary suspect in the intprod 40 ms sidecar->app latency finding.
-Fixing it needs `dapr.io/sidecar-cpu-request`-family annotations — out of scope
-here by explicit decision; revisit if tail latency persists after these changes.
+`global.dapr.sidecarResources` (defaults: request 50m/128Mi, limit 200m/256Mi) emits the
+`dapr.io/sidecar-*` annotations on every dapr-enabled pod, so daprd no longer runs
+BestEffort (cpu.shares=2) — the primary suspect in the intprod 40 ms sidecar->app
+latency finding. Measured daprd usage: 1.5-5.4m CPU, 44-72Mi.
+
+Shutdown: `global.dapr.gracefulShutdownSeconds: "20"` (INTEGER seconds — `"20s"` fails to
+parse) and `global.dapr.blockShutdownDuration: "30s"` (Go duration). Their sum must fit
+inside `global.terminationGracePeriodSeconds` (default 60; Kubernetes' own default of 30
+is too short). The db-migrator Job deliberately gets only the sizing annotations, not the
+shutdown ones. If an environment's `podAnnotations` still set any `dapr.io/sidecar-*` or
+shutdown keys, remove them there — duplicate annotation keys resolve unpredictably.

@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "maxBodySize" (coalesce .Values.execution.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.execution.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.execution.dapr "enabled" .Values.global.dapr.enabled "component" "execution" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "maxBodySize" (coalesce .Values.execution.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.execution.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize) "globalDapr" .Values.global.dapr) | nindent 8 }}
         {{- with .Values.execution.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -38,6 +38,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      {{- with .Values.global.terminationGracePeriodSeconds }}
+      {{/* Must cover the sidecar's block + graceful shutdown window — see values.yaml. */}}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .Values.execution.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
