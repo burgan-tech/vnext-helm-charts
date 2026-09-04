@@ -195,6 +195,82 @@ global:
     # Deprecated upstream; empty = not emitted. Set only for environments pinned
     # to an old sidecar.
     httpMaxRequestSize: ""
+    # ---------------------------------------------------------------------------
+    # Name resolution (Dapr Configuration spec.nameResolution, NOT a Component)
+    # ---------------------------------------------------------------------------
+    # Governs how a caller sidecar turns an app-id into an address for
+    # sidecar-to-sidecar invocation. Rendered into the `appconfig` Configuration
+    # (common-dapr-components/dapr-config.yaml), which every component already
+    # selects via its `dapr.io/config: appconfig` podAnnotation.
+    #
+    # `kubernetes` is Dapr's default in Kubernetes mode, so writing it here changes
+    # no behavior — it makes the contract explicit and gives cross-namespace
+    # resolution a single documented home.
+    #
+    # WHY NOT `nameformat`: that resolver's only operation is
+    # strings.ReplaceAll(format, "{appid}", req.ID) — it never reads req.Namespace
+    # or req.Port. With namespace-per-domain ({env}-vnext-{domain}) the callee's
+    # namespace cannot be derived from the app-id by substitution (it would need to
+    # strip the constant `-app` / `-execution-app` suffix), and Dapr pins mTLS to
+    # the real (namespace, app-id) pair via
+    # GRPCDialOptionMTLSUnknownTrustDomain(ns, appID) — so passing a bare domain to
+    # feed the format would break SPIFFE authorization. `kubernetes` exposes
+    # {{.Namespace}} as a real variable, which is the same value mTLS uses, so the
+    # address and the identity can never diverge.
+    # Local (docker-compose) is the opposite topology — one flat network, no
+    # namespaces, no Sentry/mTLS — and pins the self-hosted `mdns` resolver there
+    # instead (daprd 1.16.x ships no `nameformat`); see etc/*/dapr/config.yaml in the
+    # runtime repo.
+    nameResolution:
+      # Resolver component. Empty = omit the block entirely (Dapr falls back to its
+      # per-mode default, which is `kubernetes` in Kubernetes mode).
+      component: "kubernetes"
+      # Address template, Go text/template over Dapr's ResolveRequest
+      # ({{.ID}}, {{.Namespace}}, {{.Port}}, {{.Data.*}}).
+      #
+      # The default below is BYTE-IDENTICAL to what the kubernetes resolver builds
+      # when no template is given:
+      #   req.ID + "-dapr." + req.Namespace + ".svc." + clusterDomain + ":" + req.Port
+      # {{.Port}} is Dapr's own internal gRPC port — never the app port (5000):
+      # sidecar-to-sidecar traffic terminates at the callee's daprd, not its app.
+      #
+      # MUTUALLY EXCLUSIVE with clusterDomain: when a template is set the resolver
+      # returns early and clusterDomain is ignored (and is NOT a template variable),
+      # so a non-default cluster domain must be written into the template itself.
+      # _validate.tpl fails the render if both are set.
+      #
+      # NOTE the quoting: {{.ID}} must survive Helm's own templating and reach the
+      # sidecar literally. Keeping it as a values string (never inline in the
+      # template file) is what makes that safe.
+      template: "{{.ID}}-dapr.{{.Namespace}}.svc.cluster.local:{{.Port}}"
+      # Cluster DNS domain, used ONLY when template is empty. Empty = Dapr's
+      # default ("cluster.local").
+      clusterDomain: ""
+    # ---------------------------------------------------------------------------
+    # Cross-domain invocation targets (remote DOMAIN names, not app-ids)
+    # ---------------------------------------------------------------------------
+    # OPTIONAL. resiliency-cross-domain.yaml is rendered for every orchestrator and
+    # covers all cross-domain targets through Dapr's reserved default policy names
+    # (DefaultAppCircuitBreakerPolicy / DefaultAppRetryPolicy), so nothing needs to
+    # be listed here for the breaker and the no-retry pin to apply. Entries become
+    # explicit `targets.apps` rows `vnext-<domain>-app` — only useful when a specific
+    # domain must later get a different policy than the defaults.
+    #
+    # Write DOMAIN names ("customers"), never app-ids ("vnext-customers-app") —
+    # the template adds the prefix/suffix. Resiliency keys carry no namespace even
+    # for cross-namespace calls (daprd strips `.namespace` before the policy lookup).
+    crossDomainTargets: []
+    # ---------------------------------------------------------------------------
+    # Cross-namespace app-id template (runtime: ServiceDiscovery__Dapr__NamespaceTemplate)
+    # ---------------------------------------------------------------------------
+    # Dapr resolves a bare app-id in the CALLER's namespace, so calling another domain
+    # needs `vnext-{domain}-app.<its namespace>`. The runtime builds the namespace from
+    # this template (only token: {domain}). Leave empty to DERIVE it from the release
+    # namespace: deploying appDomain `core` into `stage-vnext-core` renders
+    # "stage-vnext-{domain}". Set it explicitly only when namespaces do not follow the
+    # `<prefix>-vnext-<domain>` convention, e.g. "shared-{domain}". A namespace that
+    # matches neither yields "" = single-namespace resolution (bare app-id).
+    crossNamespaceTemplate: ""
     # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
     # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
     # dapr.io/graceful-shutdown-seconds (INTEGER, e.g. "20" — "20s" fails to parse) and
