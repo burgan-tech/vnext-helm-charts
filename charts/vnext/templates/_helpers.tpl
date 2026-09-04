@@ -352,7 +352,86 @@ Render a value that contains template perhaps
 {{- end -}}
 
 {{/*
+Validate global.dapr.nameResolution and fail the render on a misconfiguration.
+
+Deliberately NOT part of "vnext.validateValues": that helper is only referenced from
+templates/_validate.tpl, and Helm never renders files whose basename starts with "_"
+(they are partials), so every rule in it is dead code today — `global.appDomain=""`
+renders clean despite being declared required. Activating it would also switch on four
+pre-existing rules at once and could break environments that already violate them, which
+is a separate decision. So this validation is included from dapr-config.yaml instead —
+a template Helm actually renders — which is what makes it run at all.
+
+Usage: {{ include "vnext.validateNameResolution" . }}
+*/}}
+{{/*
+Cross-namespace app-id qualification for the runtime's Dapr discovery provider
+(ServiceDiscovery__Dapr__NamespaceTemplate). Dapr resolves a bare app-id in the CALLER's own
+namespace, so a cross-domain call must carry `vnext-{domain}-app.<target namespace>`; the runtime
+builds that suffix from this template, whose only token is `{domain}`.
+
+Resolution order:
+  1. global.dapr.crossNamespaceTemplate, when set — the explicit override for environments whose
+     namespaces do not follow the `<prefix>-vnext-<domain>` convention.
+  2. Derived from .Release.Namespace: `stage-vnext-core` deploying appDomain `core` becomes
+     `stage-vnext-{domain}`. Only when the namespace really ends in `-vnext-<appDomain>`.
+  3. Otherwise empty — the runtime then treats every domain as single-namespace (bare app-id).
+
+The environment prefix is deliberately not a runtime setting: ASPNETCORE_ENVIRONMENT is a .NET
+runtime mode (Development/Staging/Production), not the namespace naming scheme, and the chart is the
+one place that actually knows the namespace.
+*/}}
+{{- define "vnext.crossNamespaceTemplate" -}}
+{{- $explicit := (.Values.global.dapr).crossNamespaceTemplate | default "" -}}
+{{- if $explicit -}}
+{{- $explicit -}}
+{{- else -}}
+{{- $suffix := printf "-vnext-%s" .Values.global.appDomain -}}
+{{- if and (ne .Release.Namespace $suffix) (hasSuffix $suffix .Release.Namespace) -}}
+{{- printf "%s-vnext-{domain}" (trimSuffix $suffix .Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "vnext.validateNameResolution" -}}
+{{- with .Values.global.dapr.nameResolution -}}
+  {{- $messages := list -}}
+  {{/*
+    Dapr's kubernetes resolver treats `template` and `clusterDomain` as mutually
+    exclusive: when a template is set ResolveID returns early, so clusterDomain is
+    silently ignored (it is not a template variable either). Setting both looks like it
+    works and quietly keeps the default cluster domain.
+  */}}
+  {{- if and .template .clusterDomain -}}
+    {{- $messages = append $messages "template and clusterDomain are mutually exclusive — when a template is set Dapr ignores clusterDomain; put the cluster domain inside the template instead" -}}
+  {{- end -}}
+  {{/*
+    A template that never expands the app-id resolves EVERY app-id to the same address:
+    DNS succeeds and the call silently lands on the wrong app. Invisible at runtime, so
+    it has to be caught here.
+  */}}
+  {{- if and .template (not (contains "{{.ID}}" .template)) -}}
+    {{- $messages = append $messages "template must contain {{.ID}} — without it every app-id resolves to the same address and calls silently reach the wrong app" -}}
+  {{- end -}}
+  {{- if and (or .template .clusterDomain) (not .component) -}}
+    {{- $messages = append $messages "template/clusterDomain is set but component is empty — the nameResolution block is not rendered, so the setting has no effect" -}}
+  {{- end -}}
+  {{- if $messages -}}
+    {{- $out := "\nglobal.dapr.nameResolution VALIDATION ERRORS:\n" -}}
+    {{- range $messages -}}
+      {{- $out = printf "%s  - %s\n" $out . -}}
+    {{- end -}}
+    {{- fail $out -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate required values
+
+WARNING: this helper is currently NEVER EXECUTED — see the note on
+"vnext.validateNameResolution" above. Adding a rule here has no effect until the include
+moves into a rendered template.
 */}}
 {{- define "vnext.validateValues" -}}
 {{- $messages := list -}}
