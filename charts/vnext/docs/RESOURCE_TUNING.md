@@ -15,11 +15,18 @@ So an environment that sets `global.resources.default` and leaves `resources: {}
 its own sizing on all of these components; delete the global to fall back to the measured
 defaults.
 
+Prefer a **sizing profile** over `global.resources.default` for anything real: one value
+cannot serve a ~530Mi orchestrator and a ~115Mi outbox worker. The profiles in
+`charts/vnext/profiles/` set per-component `resources` (precedence 1) and leave the global
+empty — see [SIZING_PROFILES.md](SIZING_PROFILES.md), which also covers replicas, the
+Redis/Dapr connection budget and the known defects in this area. Note the chart's own
+defaults are **nonprod**-sized.
+
 ## What the measured fallbacks are
 
 | Component | requests | limits | Why |
 |---|---|---|---|
-| orchestrator | 200m / 512Mi | 2 CPU / 2Gi | Steady RSS measured 440-475Mi; CPU limit >= 2 keeps .NET Server GC enabled |
+| orchestrator | 200m / 640Mi | 2 CPU / 2Gi | Steady RSS re-measured 520-541Mi (2026-09-09); the previous 512Mi request sat BELOW RSS, making the request-facing pod the first evicted under node memory pressure. CPU limit >= 2 keeps .NET Server GC enabled |
 | execution | 100m / 256Mi | 2 CPU / 2Gi | Latency-critical invoke path; headroom for 64Mi payloads |
 | worker-inbox / worker-outbox | 75m / 256Mi | 1 CPU / 1Gi | Background processing |
 | mcp-server / db-migrator | 100m / 256Mi | 1 CPU / 2Gi | The chart's former global default |
@@ -56,7 +63,7 @@ podAnnotations:
   dapr.io/config: appconfig
   dapr.io/sidecar-cpu-request: "50m"
   dapr.io/sidecar-cpu-limit: "200m"        # raise to 300m if invoke tail latency persists
-  dapr.io/sidecar-memory-request: "128Mi"
+  dapr.io/sidecar-memory-request: "96Mi"   # measured 48-81Mi on bmprod 2026-09-09
   dapr.io/sidecar-memory-limit: "256Mi"    # raise to 512Mi if 64Mi payloads are common
   dapr.io/graceful-shutdown-seconds: "20"  # INTEGER — "20s" fails to parse (silently)
   dapr.io/block-shutdown-duration: "30s"   # Go DURATION — unlike the integer above

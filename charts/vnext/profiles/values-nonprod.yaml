@@ -1,0 +1,114 @@
+# =============================================================================
+# vNext sizing profile: NONPROD  (== the chart's own defaults)
+# =============================================================================
+# This file is an EXPLICIT restatement of what charts/vnext/values.yaml already
+# ships. Passing it changes nothing; it exists so the nonprod shape is written
+# down next to the prod profiles instead of being implicit, and so CI can assert
+# the two have not drifted:
+#
+#   helm template t charts/vnext                             > /tmp/default.yaml
+#   helm template t charts/vnext -f profiles/values-nonprod.yaml > /tmp/nonprod.yaml
+#   diff /tmp/default.yaml /tmp/nonprod.yaml
+#
+# Use for: dev, test, staging, and any domain with no production traffic.
+# Fixed replicas, HPA off, one Redis node.
+#
+# Do NOT use in production: a single Redis node has no failover, and one replica
+# per component means any pod restart is a full outage for that component.
+# -----------------------------------------------------------------------------
+
+global:
+  # Leave empty. A value here would flatten every component to one size, which is
+  # exactly the mistake the per-component blocks below avoid.
+  resources:
+    default: {}
+
+  dapr:
+    redis:
+      poolSize: 5
+      minIdleConns: 1
+      idleTimeout: "5m"
+      dialTimeout: "5s"
+      readTimeout: "3s"
+      writeTimeout: "3s"
+      maxRetries: 3
+      maxRetryBackoff: "2s"
+      pubsub:
+        concurrency: 5
+        processingTimeout: "60s"
+        redeliverInterval: "30s"
+        queueDepth: 100
+        maxLenApprox: 10000
+
+orchestrator:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 640Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+execution:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+worker-inbox:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 75m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+worker-outbox:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 75m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+redis-sentinel:
+  # 1 node / quorum 1 is the only self-consistent single-node pair. It cannot fail
+  # over -- that is the trade nonprod makes. Prod profiles use 3 / 2.
+  replicaCount: 1
+  sentinel:
+    quorum: 1
+  redis:
+    network:
+      maxClients: 1000
+  resources:
+    redis:
+      requests:
+        cpu: 50m
+        memory: 192Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    sentinel:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi

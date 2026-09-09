@@ -301,19 +301,26 @@ global:
 
 #### Resource Defaults
 
+`global.resources.default` is **empty on purpose**. Sizing resolves to the first non-empty
+source of: `<component>.resources` → `global.resources.default` → the chart's measured
+`<component>.resourcesFallback`. A value here would permanently shadow the per-component
+measured fallbacks, because Helm map-merge cannot clear a non-empty chart default.
+
 ```yaml
 global:
   resources:
-    default:
-      limits:
-        cpu: 1000m
-        memory: 2Gi
-      requests:
-        cpu: 100m
-        memory: 256Mi
+    default: {}
 ```
 
-Individual services can override these defaults by specifying their own `resources` block.
+Set `global.resources.default` only when you deliberately want **one** size for every
+component. That is rarely right: the orchestrator's measured RSS is ~530Mi while the
+outbox worker's is ~115Mi, so a single value over-provisions the workers roughly 4x and
+still leaves the orchestrator requesting less than it uses.
+
+Prefer a sizing profile — see [SIZING_PROFILES.md](SIZING_PROFILES.md). The chart's own
+defaults are nonprod-sized; production installs pass
+`-f profiles/values-{low,normal,high}.yaml`. Full precedence rules are in
+[RESOURCE_TUNING.md](RESOURCE_TUNING.md).
 
 #### Health Probe Defaults
 
@@ -847,6 +854,18 @@ orchestrator:
 
 The same structure applies to `execution`, `worker-inbox`, and `worker-outbox`.
 
+**`replicaCount` is ignored while autoscaling is enabled.** Each Deployment omits
+`replicas` entirely in that case, so the HPA owns the scale and `helm upgrade` will not
+reset it. `minReplicas` therefore *is* your floor — setting both `replicaCount: 10` and
+`autoscaling.minReplicas: 5` gives you a floor of 5, not 10.
+
+HPA also needs resource **requests** to be present to compute utilisation; with
+`resources`, `global.resources.default` and `resourcesFallback` all empty, no `resources`
+block is rendered and CPU-based autoscaling silently cannot work.
+
+Ready-made replica and resource sets for both cases are in
+[SIZING_PROFILES.md](SIZING_PROFILES.md).
+
 ## Security
 
 ### mTLS
@@ -895,7 +914,10 @@ serviceAccount:
 - [ ] Set `runAsNonRoot: true` where possible
 - [ ] Use Vault for all sensitive configuration
 - [ ] Disable development tools (`pgAdmin`, `redisInsight`, `mockoon`, `openobserve`)
-- [ ] Adjust resource limits and requests for your environment
+- [ ] Apply a sizing profile: `-f profiles/values-{low,normal,high}.yaml` — the chart's own defaults are nonprod-sized ([SIZING_PROFILES.md](SIZING_PROFILES.md))
+- [ ] Set `redis-sentinel.replicaCount: 3` **and** `redis-sentinel.sentinel.quorum: 2` — a single node cannot fail over
+- [ ] Check the Redis connection budget: pods x 5 components x `global.dapr.redis.poolSize` < `redis-sentinel.redis.network.maxClients`
+- [ ] Give `daprd` resources via `podAnnotations` — a BestEffort sidecar is a known latency source
 - [ ] Manage PostgreSQL password via `existingSecret`
 
 ## Monitoring and Health Checks
@@ -1066,10 +1088,10 @@ kubectl delete namespace vnext
 | `global.database.connectionString` | PostgreSQL connection string | `"Host=vnext-postgres-headless;..."` |
 | `global.database.clickhouse.enabled` | ClickHouse integration | `false` |
 | `global.externalRedis.endpoint` | External Redis endpoint | `""` |
-| `global.resources.default.limits.cpu` | Default CPU limit | `1000m` |
-| `global.resources.default.limits.memory` | Default memory limit | `2Gi` |
-| `global.resources.default.requests.cpu` | Default CPU request | `100m` |
-| `global.resources.default.requests.memory` | Default memory request | `256Mi` |
+| `global.resources.default` | One-size override for every component. Empty by default so the per-component `resourcesFallback` applies; see [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
+| `global.dapr.redis.poolSize` | Redis client pool per Dapr component. Budget = pods x 5 components x this | `5` |
+| `global.dapr.redis.pubsub.concurrency` | Bound on in-flight pub/sub handler invocations | `5` |
+| `redis-sentinel.redis.network.maxClients` | Redis `maxclients` ceiling (`""` keeps Redis's own 10000) | `1000` |
 
 ### Service Parameters
 

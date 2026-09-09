@@ -195,6 +195,50 @@ global:
     # Deprecated upstream; empty = not emitted. Set only for environments pinned
     # to an old sidecar.
     httpMaxRequestSize: ""
+    # ---------------------------------------------------------------------------
+    # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, configuration, lock)
+    # ---------------------------------------------------------------------------
+    # THE CONNECTION-POOL KNOB. Left unset, the go-redis client inside daprd sizes
+    # its pool from GOMAXPROCS — the NODE's core count, not the sidecar's CPU limit.
+    # On 64-core workers that is hundreds of connections per component, and since
+    # none of the five Redis components declares scopes, EVERY sidecar in the
+    # namespace loads ALL of them. A domain running ~35 pods therefore opens ~175
+    # independent pools; that is what exhausts Redis (default maxclients 10000).
+    #
+    # Budget per domain = (pods) x (5 components) x poolSize. Keep it under
+    # redis-sentinel.redis.network.maxClients with room for failover reconnects.
+    # These defaults are NONPROD-sized; see profiles/values-{low,normal,high}.yaml.
+    # Setting a key to "" omits it, handing that setting back to the client's own
+    # default -- which for poolSize means the unbounded pre-1.0.110 behaviour, so
+    # don't, unless you are debugging. Note `null` will NOT clear these: Helm's
+    # coalesce restores the chart default over a null, so use "" instead.
+    redis:
+      poolSize: 5
+      minIdleConns: 1
+      idleTimeout: "5m"
+      dialTimeout: "5s"
+      readTimeout: "3s"
+      writeTimeout: "3s"
+      maxRetries: 3
+      maxRetryBackoff: "2s"
+      # pub/sub only. concurrency bounds in-flight handler invocations;
+      # maxLenApprox caps stream length, which matters because maxmemory-policy is
+      # noeviction — a full Redis REJECTS writes rather than evicting old entries.
+      pubsub:
+        concurrency: 5
+        processingTimeout: "60s"
+        redeliverInterval: "30s"
+        queueDepth: 100
+        maxLenApprox: 10000
+      # Restrict which app-ids load each component. EMPTY = today's behaviour
+      # (every sidecar in the namespace loads it). Narrowing this is the single
+      # largest connection reduction available, but a wrong guess breaks the domain
+      # at runtime, so verify actual usage first. Write full app-ids, e.g.
+      #   scopes:
+      #     lock: ["vnext-<domain>-app"]
+      #     configuration: ["vnext-<domain>-app", "vnext-<domain>-execution-app"]
+      # Keys: state | pubsub | pubsubBroadcast | configuration | lock
+      scopes: {}
     # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
     # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
     # dapr.io/graceful-shutdown-seconds (INTEGER, e.g. "20" — "20s" fails to parse) and
@@ -488,10 +532,13 @@ orchestrator:
   # below. Set a non-empty block here to override both.
   resources: {}
 
-  # Chart-managed measured default (bmprod, 2026-08-31): steady RSS 440-475Mi, idle CPU ~1m.
-  # Requests sized to actual steady-state so the scheduler and cpu.shares reflect reality;
-  # CPU limit 2 (not 1) keeps .NET Server GC enabled (ProcessorCount >= 2). Limits do not
-  # reserve node capacity. Do not edit from an environment — use resources or
+  # Chart-managed measured default. Re-measured bmprod/intprod-vnext-contract 2026-09-09:
+  # steady RSS 520-541Mi across 5 pods, idle CPU 1.0-1.4m. The memory request was 512Mi,
+  # i.e. BELOW steady-state RSS, which made the orchestrator the first pod evicted under
+  # node memory pressure despite being the request-facing component; 640Mi puts the request
+  # above measured RSS. (The earlier 440-475Mi figure was taken 2026-08-31, before the
+  # workload grew.) CPU limit 2 (not 1) keeps .NET Server GC enabled (ProcessorCount >= 2).
+  # Limits do not reserve node capacity. Do not edit from an environment — use resources or
   # global.resources.default instead.
   resourcesFallback:
     limits:
@@ -499,7 +546,7 @@ orchestrator:
       memory: 2Gi
     requests:
       cpu: 200m
-      memory: 512Mi
+      memory: 640Mi
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
@@ -1266,7 +1313,13 @@ dapr:
 # Redis Sentinel configuration
 redis-sentinel:
   enabled: true
+  # NONPROD default: a single node. Sentinel's quorum MUST match, or no master can ever
+  # be elected -- the subchart defaults quorum to 2, so the historical `replicaCount: 1`
+  # here shipped a Redis that could never fail over (NOTES.txt warns but nothing blocks
+  # it). Production must use 3 nodes / quorum 2: see profiles/values-{low,normal,high}.yaml.
   replicaCount: 1
+  sentinel:
+    quorum: 1
   openshift:
     enabled: false
   
@@ -1290,6 +1343,13 @@ redis-sentinel:
       lazyfree-lazy-user-del yes
       replica-lazy-flush yes
     
+    # Connection ceiling. Scales with POD count, not traffic: each Dapr sidecar opens one
+    # pool per Redis component (state + pubsub + pubsub-broadcast + configuration + lock).
+    # Budget = pods x components x global.dapr.redis.poolSize + failover headroom.
+    # Nonprod (4 app pods, poolSize 5) needs ~100; 1000 leaves a wide margin.
+    network:
+      maxClients: 1000
+
     persistence:
       enabled: true
       size: 8Gi
@@ -1324,21 +1384,28 @@ redis-sentinel:
               matchLabels:
                 app.kubernetes.io/name: redis-sentinel
   
+  # NONPROD sizing. Measured bmprod/intprod-vnext-contract 2026-09-09 (the busiest vNext
+  # domain): redis 12-17m CPU / 58-84Mi RSS, sentinel 12.8-13.4m / 11-12Mi. Redis is
+  # effectively idle at every observed load -- the bottleneck is CONNECTION COUNT, not
+  # CPU or memory, so tune global.dapr.redis.poolSize and network.maxClients rather than
+  # these. NOTE resources.redis.limits.memory is also the maxmemory knob: maxmemory
+  # derives as 0.78 x that limit unless redis.maxMemory is set, so 1Gi => ~800mb against
+  # an ~84Mi dataset. The previous 3Gi limit meant ~2.4Gi of maxmemory for nothing.
   resources:
     redis:
       limits:
-        cpu: 1000m
-        memory: 3Gi
+        cpu: 500m
+        memory: 1Gi
       requests:
-        cpu: 100m
-        memory: 256Mi
+        cpu: 50m
+        memory: 192Mi
     sentinel:
       limits:
         cpu: 200m
         memory: 256Mi
       requests:
-        cpu: 50m
-        memory: 64Mi
+        cpu: 25m
+        memory: 32Mi
   
   metrics:
     enabled: true

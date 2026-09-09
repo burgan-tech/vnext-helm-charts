@@ -150,6 +150,44 @@ jobs:
             --set openobserve.enabled=true \
             --debug > /dev/null
 
+      - name: Validate templates (sizing profiles)
+        run: |
+          for p in nonprod low normal high; do
+            echo "--- profiles/values-$p.yaml ---"
+            helm template test-release ${{ env.CHART_PATH }} \
+              --namespace vnext \
+              -f ${{ env.CHART_PATH }}/profiles/values-$p.yaml \
+              --debug > "/tmp/profile-$p.yaml"
+          done
+
+      - name: Assert nonprod profile still equals the chart default
+        run: |
+          # values-nonprod.yaml is documented as an explicit restatement of the chart's
+          # own defaults; this is what keeps that promise true. The redis/sentinel
+          # passwords are randAlphaNum per render, so they are excluded.
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext > /tmp/profile-default.yaml
+          if ! diff <(grep -vE 'redis-password:|sentinel-password:' /tmp/profile-default.yaml) \
+                    <(grep -vE 'redis-password:|sentinel-password:' /tmp/profile-nonprod.yaml); then
+            echo "::error::profiles/values-nonprod.yaml has drifted from charts/vnext/values.yaml."
+            echo "Update whichever is wrong, or move the change into a prod profile instead."
+            exit 1
+          fi
+          echo "OK: nonprod profile == chart default"
+
+      - name: Assert every Redis component carries a bounded connection pool
+        run: |
+          # Regression guard for the connection-pool fix: all five Redis-backed Dapr
+          # components (state, pubsub, pubsub-broadcast, configuration, lock) must
+          # declare poolSize. Without it go-redis sizes the pool from the NODE's core
+          # count and a scaled-out domain exhausts Redis maxclients.
+          found=$(grep -c 'name: poolSize' /tmp/profile-normal.yaml || true)
+          if [ "$found" -ne 5 ]; then
+            echo "::error::expected poolSize on 5 Redis components, found $found"
+            exit 1
+          fi
+          echo "OK: poolSize present on all 5 Redis components"
+
   release:
     name: Version Bump, Package & Publish
     needs: lint

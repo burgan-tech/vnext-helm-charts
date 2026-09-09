@@ -423,6 +423,67 @@ Usage: {{ include "vnext.redisEndpoint" . }}
 {{- end -}}
 
 {{/*
+Dapr Redis client connection metadata, shared by every Redis-backed component
+(state, pubsub, pubsub-broadcast, configuration, lock).
+
+WHY THIS EXISTS: with poolSize unset, the go-redis client Dapr embeds derives its
+pool from GOMAXPROCS -- i.e. the NODE's core count, not the sidecar's CPU limit.
+On large workers that is hundreds of connections per component, and because these
+components declare no scopes, EVERY sidecar in the namespace loads all five. That
+is what exhausts Redis (default maxclients 10000) as a domain scales out.
+
+A key set to "" is OMITTED rather than emitted as an empty value, which is the only
+way an environment can hand a setting back to the client's own default: Helm's
+coalesce restores a chart default over `null`, so `null` cannot clear these.
+Usage: {{ include "vnext.daprRedisConnectionMetadata" . | trim | nindent 2 }}
+*/}}
+{{- define "vnext.daprRedisConnectionMetadata" -}}
+{{- $r := .Values.global.dapr.redis | default dict -}}
+{{- range $k := list "poolSize" "minIdleConns" "idleTimeout" "dialTimeout" "readTimeout" "writeTimeout" "maxRetries" "maxRetryBackoff" }}
+{{- $v := get $r $k -}}
+{{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Dapr Redis pub/sub-only metadata. Bounds in-flight handler invocations and caps
+stream length, which is what keeps a backed-up consumer from growing the stream
+past maxmemory (the policy is noeviction, so a full Redis REJECTS writes).
+Same ""-omits-the-key contract as the connection metadata above.
+Usage: {{ include "vnext.daprRedisPubsubMetadata" . | trim | nindent 2 }}
+*/}}
+{{- define "vnext.daprRedisPubsubMetadata" -}}
+{{- $p := (.Values.global.dapr.redis | default dict).pubsub | default dict -}}
+{{- range $k := list "concurrency" "processingTimeout" "redeliverInterval" "queueDepth" "maxLenApprox" }}
+{{- $v := get $p $k -}}
+{{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Optional scopes block for a Redis component. Defaults to EMPTY, which preserves
+the historical behaviour: an unscoped component is loaded by every sidecar in the
+namespace. Narrowing scopes is the single largest connection reduction available,
+but a wrong guess breaks the domain at runtime, so it is opt-in per environment.
+Usage: {{ include "vnext.daprRedisScopes" (dict "root" . "key" "state") }}
+*/}}
+{{- define "vnext.daprRedisScopes" -}}
+{{- $scopes := index ((.root.Values.global.dapr.redis | default dict).scopes | default dict) .key -}}
+{{- with $scopes }}
+scopes:
+{{- range . }}
+- {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Get Vault address with fallback
 Usage: {{ include "vnext.vaultAddress" . }}
 */}}
