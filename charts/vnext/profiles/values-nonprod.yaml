@@ -24,6 +24,10 @@ global:
     default: {}
 
   dapr:
+    # Redis client pool. Per-host sum, because each sidecar loads only the components it
+    # is scoped to: orchestrator 4 (state, lock, pubsub, pubsub-broadcast), execution 2
+    # (state, pubsub), each worker 1 (pubsub), db-migrator 1 (lock).
+    #   2/2/2/2 pods -> 80 connections   (maxClients 1000)
     redis:
       poolSize: 5
       minIdleConns: 1

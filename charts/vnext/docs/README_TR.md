@@ -916,7 +916,7 @@ serviceAccount:
 - [ ] Geliştirme araçlarını devre dışı bırakın (`pgAdmin`, `redisInsight`, `mockoon`, `openobserve`)
 - [ ] Bir boyutlandırma profili uygulayın: `-f profiles/values-{low,normal,high}.yaml` — chart varsayılanları nonprod ölçeğindedir ([SIZING_PROFILES.md](SIZING_PROFILES.md))
 - [ ] `redis-sentinel.replicaCount: 3` **ve** `redis-sentinel.sentinel.quorum: 2` ayarlayın — tek düğüm failover yapamaz
-- [ ] Redis bağlantı bütçesini kontrol edin: pod x 5 bileşen x `global.dapr.redis.poolSize` < `redis-sentinel.redis.network.maxClients`
+- [ ] Redis bağlantı bütçesini kontrol edin — her sidecar yalnızca scope'landığı bileşenleri yüklediği için host bazlı toplamdır ([SIZING_PROFILES.md](SIZING_PROFILES.md))
 - [ ] `daprd`'ye `podAnnotations` ile kaynak verin — BestEffort sidecar bilinen bir gecikme kaynağıdır
 - [ ] PostgreSQL şifresini `existingSecret` üzerinden yönetin
 
@@ -1089,7 +1089,7 @@ kubectl delete namespace vnext
 | `global.database.clickhouse.enabled` | ClickHouse entegrasyonu | `false` |
 | `global.externalRedis.endpoint` | Harici Redis endpoint'i | `""` |
 | `global.resources.default` | Tüm bileşenler için tek boyut. Varsayılan boştur, bileşen bazlı `resourcesFallback` uygulanır; bkz. [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
-| `global.dapr.redis.poolSize` | Dapr bileşeni başına Redis client pool'u. Bütçe = pod x 5 bileşen x bu değer | `5` |
+| `global.dapr.redis.poolSize` | Sidecar'ın scope'landığı her Dapr bileşeni için Redis client pool'u (orchestrator 4, execution 2, worker 1) | `5` |
 | `global.dapr.redis.pubsub.concurrency` | Eşzamanlı pub/sub handler çağrısı üst sınırı | `5` |
 | `redis-sentinel.redis.network.maxClients` | Redis `maxclients` üst sınırı (`""` Redis'in kendi 10000 değerini korur) | `1000` |
 

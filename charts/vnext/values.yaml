@@ -40,7 +40,8 @@ global:
     #         value: http://mocklab:3001/api/notification/state
 
   # Dynamic pub/sub components for event-driven workflows.
-  # Each entry renders a Dapr Component scoped to the orchestrator (vnext-<appDomain>-app) sidecar.
+  # Each entry renders a Dapr Component scoped to BOTH the orchestrator (vnext-<appDomain>-app)
+  # and the execution (vnext-<appDomain>-execution-app) sidecars -- see vnext-pubsub-template.yaml.
   # The component name is used verbatim; reference it from subscriptionComponents[].spec.pubsubname.
   pubsubComponents: []
     # - name: kafka-events
@@ -196,17 +197,26 @@ global:
     # to an old sidecar.
     httpMaxRequestSize: ""
     # ---------------------------------------------------------------------------
-    # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, configuration, lock)
+    # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, lock)
     # ---------------------------------------------------------------------------
     # THE CONNECTION-POOL KNOB. Left unset, the go-redis client inside daprd sizes
     # its pool from GOMAXPROCS — the NODE's core count, not the sidecar's CPU limit.
-    # On 64-core workers that is hundreds of connections per component, and since
-    # none of the five Redis components declares scopes, EVERY sidecar in the
-    # namespace loads ALL of them. A domain running ~35 pods therefore opens ~175
-    # independent pools; that is what exhausts Redis (default maxclients 10000).
+    # On 64-core workers that is hundreds of connections per component.
     #
-    # Budget per domain = (pods) x (5 components) x poolSize. Keep it under
-    # redis-sentinel.redis.network.maxClients with room for failover reconnects.
+    # The budget is a PER-HOST SUM, not pods x components, because each sidecar now
+    # loads only the components it actually consumes (see scopes below):
+    #
+    #   budget = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+    #
+    #   orchestrator  4   state, lock, pubsub, pubsub-broadcast
+    #   execution     2   state, pubsub
+    #   worker-inbox  1   pubsub
+    #   worker-outbox 1   pubsub
+    #   db-migrator   1   lock   (a Job -- transient, but it does hold a pool)
+    #
+    # Keep the total under redis-sentinel.redis.network.maxClients with room for the
+    # reconnect burst that follows a Sentinel failover (roughly double the steady
+    # figure). Worked numbers per profile are in docs/SIZING_PROFILES.md.
     # These defaults are NONPROD-sized; see profiles/values-{low,normal,high}.yaml.
     # Setting a key to "" omits it, handing that setting back to the client's own
     # default -- which for poolSize means the unbounded pre-1.0.110 behaviour, so
@@ -230,14 +240,35 @@ global:
         redeliverInterval: "30s"
         queueDepth: 100
         maxLenApprox: 10000
-      # Restrict which app-ids load each component. EMPTY = today's behaviour
-      # (every sidecar in the namespace loads it). Narrowing this is the single
-      # largest connection reduction available, but a wrong guess breaks the domain
-      # at runtime, so verify actual usage first. Write full app-ids, e.g.
+      # Which app-ids load each component. The chart ships an evidence-backed
+      # DEFAULT -- these are no longer opt-in, and leaving this empty does NOT mean
+      # "load everywhere" any more:
+      #
+      #   state            orchestrator, execution
+      #   lock             orchestrator, db-migrator
+      #   pubsub           orchestrator, execution, worker-inbox, worker-outbox
+      #   pubsubBroadcast  orchestrator
+      #
+      # Derived from vnext/docs/runtime/dapr-component-footprint.md, which maps each
+      # building block to the consumption points in code. An unscoped component is
+      # loaded by every sidecar in the namespace and costs a Redis pool on each one,
+      # which is what exhausted Redis before this was scoped.
+      #
+      # Override REPLACES a component's list (it does not merge). Use full app-ids;
+      # an explicit empty list restores unscoped load-everywhere behaviour:
       #   scopes:
-      #     lock: ["vnext-<domain>-app"]
-      #     configuration: ["vnext-<domain>-app", "vnext-<domain>-execution-app"]
-      # Keys: state | pubsub | pubsubBroadcast | configuration | lock
+      #     pubsub: ["vnext-<domain>-app", "vnext-<domain>-worker-inbox-app"]
+      #
+      # execution is in `pubsub` by default even though only domain-authored
+      # DaprPubSubTasks use it: an execution sidecar outside the scope fails when
+      # such a task first runs (at runtime, not at render), and one pool per
+      # execution pod is cheap insurance. Drop it here once you have confirmed no
+      # domain publishes from a task.
+      #
+      # Keys: state | pubsub | pubsubBroadcast | lock
+      # The `configuration` component was DELETED -- no code calls the Dapr
+      # Configuration API. The secretstore is deliberately unscoped (every Redis
+      # component names it as auth.secretStore, and it is create-once).
       scopes: {}
     # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
     # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
@@ -918,7 +949,7 @@ worker-inbox:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-worker-inbox-app)
     # Used for service discovery and pub/sub
     appId: ""
     # Port that the application listens on
@@ -1042,7 +1073,7 @@ worker-outbox:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-worker-outbox-app)
     # Used for service discovery and pub/sub
     appId: ""
     # Port that the application listens on
@@ -1245,7 +1276,7 @@ db-migrator:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-db-migrator-app)
     # Used for service discovery and pub/sub
     appId: ""
 

@@ -24,11 +24,15 @@ global:
     default: {}
 
   dapr:
-    # Redis client pool. Budget = pods x 5 components x poolSize, and it must stay
-    # under redis-sentinel.redis.network.maxClients with room for the reconnect burst
-    # that follows a Sentinel failover.
-    #   floor   6 pods x 5 x 10 = 300 connections
-    #   ceiling 20 pods x 5 x 10 = 1000 connections   (maxClients 5000)
+    # Redis client pool. The budget is a PER-HOST SUM, because each sidecar loads only
+    # the components it is scoped to: orchestrator 4 (state, lock, pubsub,
+    # pubsub-broadcast), execution 2 (state, pubsub), each worker 1 (pubsub), and
+    # db-migrator 1 (lock -- a Job, transient, but it does hold a pool).
+    #   budget = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+    # Keep it under redis-sentinel.redis.network.maxClients with room for the reconnect
+    # burst after a Sentinel failover (roughly double the steady figure).
+    #   floor    2/2/1/1 pods -> 140 connections
+    #   ceiling  6/6/4/4 pods -> 440 connections   (maxClients 5000)
     redis:
       poolSize: 10
       minIdleConns: 2
@@ -73,7 +77,8 @@ orchestrator:
     # 5 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
     # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
     # pod that is on every request path), and the LIMIT covers several concurrent bodies.
-    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
     dapr.io/sidecar-cpu-request: 50m
     dapr.io/sidecar-cpu-limit: 200m
     dapr.io/sidecar-memory-request: 96Mi
@@ -108,7 +113,8 @@ execution:
     # 5 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
     # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
     # pod that is on every request path), and the LIMIT covers several concurrent bodies.
-    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
     dapr.io/sidecar-cpu-request: 50m
     dapr.io/sidecar-cpu-limit: 200m
     dapr.io/sidecar-memory-request: 96Mi
@@ -143,7 +149,8 @@ worker-inbox:
     # 5 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
     # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
     # pod that is on every request path), and the LIMIT covers several concurrent bodies.
-    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
     dapr.io/sidecar-cpu-request: 50m
     dapr.io/sidecar-cpu-limit: 200m
     dapr.io/sidecar-memory-request: 96Mi
@@ -178,7 +185,8 @@ worker-outbox:
     # 5 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
     # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
     # pod that is on every request path), and the LIMIT covers several concurrent bodies.
-    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
     dapr.io/sidecar-cpu-request: 50m
     dapr.io/sidecar-cpu-limit: 200m
     dapr.io/sidecar-memory-request: 96Mi

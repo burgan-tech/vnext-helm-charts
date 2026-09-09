@@ -177,16 +177,75 @@ jobs:
 
       - name: Assert every Redis component carries a bounded connection pool
         run: |
-          # Regression guard for the connection-pool fix: all five Redis-backed Dapr
-          # components (state, pubsub, pubsub-broadcast, configuration, lock) must
-          # declare poolSize. Without it go-redis sizes the pool from the NODE's core
-          # count and a scaled-out domain exhausts Redis maxclients.
+          # Regression guard for the connection-pool fix: all four Redis-backed Dapr
+          # components (state, pubsub, pubsub-broadcast, lock) must declare poolSize.
+          # Without it go-redis sizes the pool from the NODE's core count and a
+          # scaled-out domain exhausts Redis maxclients. Was five before
+          # configuration.redis was deleted (no code calls the Configuration API).
           found=$(grep -c 'name: poolSize' /tmp/profile-normal.yaml || true)
-          if [ "$found" -ne 5 ]; then
-            echo "::error::expected poolSize on 5 Redis components, found $found"
+          if [ "$found" -ne 4 ]; then
+            echo "::error::expected poolSize on 4 Redis components, found $found"
             exit 1
           fi
-          echo "OK: poolSize present on all 5 Redis components"
+          if grep -q 'configuration.redis' /tmp/profile-normal.yaml; then
+            echo "::error::configuration.redis is back -- nothing calls the Dapr Configuration API"
+            exit 1
+          fi
+          echo "OK: poolSize present on all 4 Redis components"
+
+      - name: Assert Redis components are scoped, and the env matrix mirrors the scopes
+        run: |
+          # Scoping is what keeps the per-sidecar component count (and therefore the
+          # Redis connection budget) down. An unscoped component is loaded by EVERY
+          # sidecar in the namespace. This also catches the inverse failure: a host
+          # holding a DAPR_*_STORE_NAME whose component its sidecar cannot serve,
+          # which surfaces only at first use.
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext --set global.appDomain=demo > /tmp/scoped.yaml
+          python3 - <<'EOF'
+          import re, sys
+          docs = open('/tmp/scoped.yaml').read().split('---')
+          want_scopes = {
+            'test-release-vnext-state':            ['vnext-demo-app','vnext-demo-execution-app'],
+            'test-release-vnext-redis-lock':       ['vnext-demo-app','vnext-demo-db-migrator-app'],
+            'test-release-vnext-pubsub':           ['vnext-demo-app','vnext-demo-execution-app',
+                                                    'vnext-demo-worker-inbox-app','vnext-demo-worker-outbox-app'],
+            'test-release-vnext-pubsub-broadcast': ['vnext-demo-app'],
+          }
+          want_env = {
+            'test-release-vnext-orchestrator-config':  {'STATE','LOCK','PUBSUB'},
+            'test-release-vnext-execution-config':     {'STATE','PUBSUB'},
+            'test-release-vnext-worker-inbox-config':  {'PUBSUB'},
+            'test-release-vnext-worker-outbox-config': {'PUBSUB'},
+            'test-release-vnext-db-migrator-config':   {'LOCK'},
+          }
+          seen_s, seen_e, bad = {}, {}, []
+          for b in docs:
+              n = re.search(r'^  name: (\S+)$', b, re.M)
+              if not n: continue
+              if 'kind: Component' in b:
+                  seen_s[n.group(1)] = re.findall(r'^- "(\S+)"$', b, re.M)
+              if 'kind: ConfigMap' in b:
+                  seen_e[n.group(1)] = set(re.findall(r'DAPR_(STATE|LOCK|PUBSUB)_STORE_NAME', b))
+          for k, v in want_scopes.items():
+              if seen_s.get(k) != v:
+                  bad.append(f'scopes {k}: got {seen_s.get(k)} want {v}')
+          for k, v in want_env.items():
+              if seen_e.get(k) != v:
+                  bad.append(f'env {k}: got {sorted(seen_e.get(k) or [])} want {sorted(v)}')
+          sec = [k for k in seen_s if k.endswith('-secret')]
+          for k in sec:
+              if seen_s[k]:
+                  bad.append(f'{k} must stay UNSCOPED (every component auth.secretStore); got {seen_s[k]}')
+          txt = open('/tmp/scoped.yaml').read()
+          for dead in ('DAPR_PUBSUB_BROADCAST_STORE_NAME', 'Redis__'):
+              if dead in txt:
+                  bad.append(f'{dead} is dead config and must not be emitted')
+          if bad:
+              for b_ in bad: print(f'::error::{b_}')
+              sys.exit(1)
+          print('OK: scopes and the DAPR_*_STORE_NAME env matrix mirror each other')
+          EOF
 
   release:
     name: Version Bump, Package & Publish

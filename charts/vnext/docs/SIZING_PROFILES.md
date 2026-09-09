@@ -76,38 +76,77 @@ implicit default happens to be on a given node size.
 ### The budget, and how to check yours
 
 ```
-connections per domain  =  pods  x  5 components  x  global.dapr.redis.poolSize
+connections per domain = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+
+  orchestrator  4   state, lock, pubsub, pubsub-broadcast
+  execution     2   state, pubsub
+  worker-inbox  1   pubsub
+  worker-outbox 1   pubsub
+  db-migrator   1   lock      (a Job -- transient, but it does hold a pool)
 ```
 
+It is a per-host sum rather than `pods x components` because each sidecar loads only the
+components it is scoped to — see [Scoping](#scoping-what-actually-cut-the-budget-in-half).
+
 It must stay under `redis-sentinel.redis.network.maxClients`, with headroom for the
-reconnect burst that follows a Sentinel failover.
+reconnect burst that follows a Sentinel failover (roughly double the steady figure).
 
 | Profile | `poolSize` | at floor | at HPA ceiling | `maxClients` |
 |---|---|---|---|---|
-| nonprod | 5 | 200 | n/a (HPA off) | 1000 |
-| low | 10 | 300 | 1000 | 5000 |
-| normal | 20 | 2100 | 5300 | 10000 |
-| high | 20 | 4200 | **10600** | 20000 |
+| nonprod | 5 | 80 | n/a (HPA off) | 1000 |
+| low | 10 | 140 | 440 | 5000 |
+| normal | 20 | 1120 | 2560 | 10000 |
+| high | 20 | 2240 | 5120 | 20000 |
 
-Note `high` is the reason `maxClients` is raised to 20000: at its ceiling it would
-otherwise cross Redis's 10000 default and Redis would start refusing connections — which
-surfaces in the apps as exactly the pool errors this change addresses.
+`high` keeps `maxClients: 20000` even though 5120 fits under Redis's 10000 default: a
+Sentinel failover reconnects the whole fleet at once, and 5120 x 2 would cross it.
 
-**If you need more headroom, narrow `scopes` before raising `maxClients`.** Restricting
-which app-ids load each component is the single largest reduction available:
+### Scoping: what actually cut the budget in half
+
+Before scoping, all five components were unscoped, so **every** sidecar in the namespace
+loaded **all** of them — a ~35-pod domain opened ~175 independent pools. The components
+are now scoped to the hosts that consume them, and the `configuration` component was
+deleted outright:
+
+| Component | Loaded by | Why |
+|---|---|---|
+| `state` | orchestrator, execution | platform cache; `StateStoreTask`/`CacheAsideTask` fall back to it |
+| `lock` | orchestrator, **db-migrator** | `InstanceStatusLock` etc.; `SchemaMigrationRunner` |
+| `pubsub` | orchestrator, execution, both workers | outbox nudge, subscriptions, domain tasks |
+| `pubsub-broadcast` | orchestrator | held for a planned invalidation path; unused elsewhere |
+| `configuration` | **deleted** | no code calls the Dapr Configuration API |
+| `secretstore` | everyone (unscoped) | every Redis component's `auth.secretStore` |
+
+That is the source of the numbers above: 4 components on the orchestrator, 2 on
+execution, 1 on each worker. The mapping comes from
+`vnext/docs/runtime/dapr-component-footprint.md`, which derives it from **consumption
+points in code** rather than DI registrations (a registration is lazy and proves nothing).
+
+Two traps worth knowing before you edit `scopes`:
+
+- **`db-migrator` is a Job but it does get a sidecar.** Leaving it out of `lock` fails
+  the schema migration.
+- **`execution` is in `pubsub` by default** even though only domain-authored
+  `DaprPubSubTask`s use it. Domains are authored independently and 50+ exist; an execution
+  sidecar outside the scope fails when such a task **first runs** — at runtime, not at
+  render. One pool per execution pod is cheap insurance. Drop it once you have confirmed
+  no domain publishes from a task.
+
+An override **replaces** a component's default list rather than merging, and an explicit
+empty list restores unscoped load-everywhere behaviour:
 
 ```yaml
 global:
   dapr:
     redis:
       scopes:
-        lock: ["vnext-<domain>-app"]
-        configuration: ["vnext-<domain>-app", "vnext-<domain>-execution-app"]
+        pubsub: ["vnext-<domain>-app", "vnext-<domain>-worker-inbox-app"]
 ```
 
-Empty (the default) preserves the historical behaviour of loading everywhere. **Verify
-actual usage first** — a component a running app needs but is not scoped to fails at
-runtime, not at render time.
+Do **not** scope the secretstore. Every Redis component names it as `auth.secretStore`, so
+a sidecar scoped out of it loses `redis-password`; and it is create-once (`lookup` guard
+plus `helm.sh/resource-policy: keep`), so a scope added later would not even reach an
+existing release.
 
 ## Replicas
 
@@ -135,8 +174,11 @@ until it is rescheduled. Cost is ~0.9 CPU and ~2.8Gi of requests per nonprod dom
 
 **Redis runs 3 nodes / quorum 2 in nonprod too**, for the same reason the app components
 run 2: a single node never exercises what production does — Sentinel failover, the
-client's `failover: true` path, the multi-host sentinel endpoint list that
-`vnext.redisEndpoint` builds from `replicaCount`, or a replica's diskless resync. It also
+client's `failover: true` path, the multi-host sentinel list that `vnext.redisEndpoint`
+builds from `replicaCount` and feeds to every Dapr component's `redisHost`, or a
+replica's diskless resync. (That list no longer reaches the *application*: the
+`Redis__Standalone__EndPoints__0` env key was removed because the runtime dropped
+`AddRedis()` — only the Dapr sidecar consumes it now.) It also
 makes the subchart's PodDisruptionBudget (`maxUnavailable: 1`) and the default
 `podAntiAffinity` meaningful, both of which are moot at 1 replica.
 
@@ -212,8 +254,8 @@ pub/sub handler invocations respectively. Two rules follow:
 - the memory **limit** covers several concurrent bodies. A 256Mi limit tolerates only two
   before OOM, which is why even `low` is at 384Mi.
 
-daprd also now holds up to `poolSize x 5 components` Redis connections per sidecar, each
-with its own read/write buffers.
+daprd holds `poolSize` connections per Redis component it is **scoped to** — 4 for the
+orchestrator, 2 for execution, 1 for each worker — each with its own read/write buffers.
 
 CPU limits do not reserve node capacity, so they are cheap headroom. CPU and memory
 **requests** do reserve, and the sidecar is multiplied by every pod — see the cost note
@@ -306,6 +348,22 @@ These are **not** fixed by this change. Read before rolling out.
 8. **No PodDisruptionBudget for the app components** (only `redis-sentinel` has one), and
    no `topologySpreadConstraints` anywhere — only a *preferred* `podAntiAffinity`, which
    a busy scheduler is free to ignore.
+
+9. **`DAPR_PLACEMENT_HOST` is dead *and* wrong, and is left in place deliberately.** No
+   runtime C# reads it, and its default `dapr-placement:50005` names no Service this chart
+   deploys — the vendored subchart's Service is `dapr-placement-server`
+   (`charts/dapr/templates/_address_placement.tpl`). Turning actors/placement off is
+   tracked as separate work. Note that in production the Dapr control plane lives in its
+   own namespace (`intprod-dapr`) and the injector supplies `--placement-host-address`
+   itself, so flipping the chart's vendored `dapr.global.actors.enabled` would **not**
+   remove the production placement StatefulSet — that needs the `intprod-dapr` owner.
+
+10. **The `configuration` component is deleted here but still provisioned in the runtime
+    repo.** `vnext/etc/*/dapr/components/config.yaml` still creates `vnext-config`
+    (`configuration.redis`) for all five hosts, and the platform audit calls keeping it
+    "a decision". Deleting it in Kubernetes is functionally safe — verified zero
+    `GetConfiguration`/`SubscribeConfiguration` calls — but Kubernetes now diverges from
+    local/compose. One side should move; raise it with the platform team.
 
 ## Migrating an existing production domain
 
@@ -431,8 +489,11 @@ helm template t charts/vnext > /tmp/default.yaml
 diff <(grep -vE 'redis-password:|sentinel-password:' /tmp/default.yaml) \
      <(grep -vE 'redis-password:|sentinel-password:' /tmp/nonprod.yaml)
 
-# the pool bound reaches all five Redis components
-grep -c 'name: poolSize' /tmp/normal.yaml        # expect 5
+# the pool bound reaches every Redis component (5th, configuration.redis, was deleted)
+grep -c 'name: poolSize' /tmp/normal.yaml        # expect 4
+
+# every Redis component is scoped, and the secretstore is not
+grep -c 'scopes:' /tmp/normal.yaml               # expect 7 (4 Redis + 2 resiliency + 1 binding)
 
 # maxclients, maxmemory and a coherent quorum
 grep -E 'maxclients|maxmemory ' /tmp/normal.yaml

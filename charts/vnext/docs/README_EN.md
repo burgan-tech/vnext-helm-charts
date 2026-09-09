@@ -916,7 +916,7 @@ serviceAccount:
 - [ ] Disable development tools (`pgAdmin`, `redisInsight`, `mockoon`, `openobserve`)
 - [ ] Apply a sizing profile: `-f profiles/values-{low,normal,high}.yaml` — the chart's own defaults are nonprod-sized ([SIZING_PROFILES.md](SIZING_PROFILES.md))
 - [ ] Set `redis-sentinel.replicaCount: 3` **and** `redis-sentinel.sentinel.quorum: 2` — a single node cannot fail over
-- [ ] Check the Redis connection budget: pods x 5 components x `global.dapr.redis.poolSize` < `redis-sentinel.redis.network.maxClients`
+- [ ] Check the Redis connection budget — a per-host sum, since each sidecar loads only the components it is scoped to ([SIZING_PROFILES.md](SIZING_PROFILES.md))
 - [ ] Give `daprd` resources via `podAnnotations` — a BestEffort sidecar is a known latency source
 - [ ] Manage PostgreSQL password via `existingSecret`
 
@@ -1089,7 +1089,7 @@ kubectl delete namespace vnext
 | `global.database.clickhouse.enabled` | ClickHouse integration | `false` |
 | `global.externalRedis.endpoint` | External Redis endpoint | `""` |
 | `global.resources.default` | One-size override for every component. Empty by default so the per-component `resourcesFallback` applies; see [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
-| `global.dapr.redis.poolSize` | Redis client pool per Dapr component. Budget = pods x 5 components x this | `5` |
+| `global.dapr.redis.poolSize` | Redis client pool per Dapr component the sidecar is scoped to (orchestrator 4, execution 2, worker 1) | `5` |
 | `global.dapr.redis.pubsub.concurrency` | Bound on in-flight pub/sub handler invocations | `5` |
 | `redis-sentinel.redis.network.maxClients` | Redis `maxclients` ceiling (`""` keeps Redis's own 10000) | `1000` |
 
