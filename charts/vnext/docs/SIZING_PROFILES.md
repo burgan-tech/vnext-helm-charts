@@ -13,7 +13,7 @@ helm upgrade --install vnext-<domain> oci://ghcr.io/burgan-tech/vnext/vnext \
 
 | Profile | Use for | App pods (floor → ceiling) |
 |---|---|---|
-| `values-nonprod.yaml` | dev / test / staging. Identical to the chart default. | 4 (fixed) |
+| `values-nonprod.yaml` | dev / test / staging. Identical to the chart default. | 8 (fixed) |
 | `values-low.yaml` | Prod, light or business-hours-only traffic. **Expected to fit most of the 50+ domains.** | 6 → 20 |
 | `values-normal.yaml` | Prod, steady traffic. Orchestration 10 / execution 5 / inbox 3 / outbox 3 as the HPA floor. | 21 → 53 |
 | `values-high.yaml` | Prod, the few hottest domains only. | 42 → 106 |
@@ -84,7 +84,7 @@ reconnect burst that follows a Sentinel failover.
 
 | Profile | `poolSize` | at floor | at HPA ceiling | `maxClients` |
 |---|---|---|---|---|
-| nonprod | 5 | 100 | n/a (HPA off) | 1000 |
+| nonprod | 5 | 200 | n/a (HPA off) | 1000 |
 | low | 10 | 300 | 1000 | 5000 |
 | normal | 20 | 2100 | 5300 | 10000 |
 | high | 20 | 4200 | **10600** | 20000 |
@@ -116,14 +116,28 @@ whenever `autoscaling.enabled` is true, so `helm upgrade` never fights the HPA.
 
 | Component | nonprod | low | normal | high |
 |---|---|---|---|---|
-| orchestrator | 1, HPA off | 2 / 6 | 10 / 20 | 20 / 40 |
-| execution | 1, HPA off | 2 / 6 | 5 / 15 | 10 / 30 |
-| worker-inbox | 1, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
-| worker-outbox | 1, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
+| orchestrator | 2, HPA off | 2 / 6 | 10 / 20 | 20 / 40 |
+| execution | 2, HPA off | 2 / 6 | 5 / 15 | 10 / 30 |
+| worker-inbox | 2, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
+| worker-outbox | 2, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
 | redis-sentinel | **1, quorum 1** | 3, quorum 2 | 3, quorum 2 | 3, quorum 2 |
 
 Prod HPA targets are 75% CPU and 75% memory. HPA needs requests present to compute
 utilisation at all — every profile sets them, so this holds.
+
+**Nonprod runs 2 replicas per app component, not 1.** Two is the minimum that exercises
+the multi-instance code paths production actually runs — competing consumers on the Redis
+pub/sub streams, distributed locks, cache invalidation races. At 1 replica nonprod never
+reaches them while prod runs 10/5/3/3, which is how multi-instance bugs reach production.
+It also survives a node drain, which matters here because the chart ships **no
+PodDisruptionBudget** for the app components (Risk 8): a single replica is simply gone
+until it is rescheduled. Cost is ~0.9 CPU and ~2.8Gi of requests per nonprod domain.
+
+**Redis stays at 1 node in nonprod — do not "match" it to 2.** Two Sentinels is strictly
+worse than one: with `quorum: 2` a single node loss leaves one Sentinel, which can never
+reach quorum, so no failover happens; with `quorum: 1` two Sentinels can each elect
+themselves and split-brain. The self-consistent options are **1/1** (nonprod: no failover,
+accepted) or **3/2** (prod: real failover). There is no useful 2-node Sentinel topology.
 
 **Sentinel quorum must match the node count.** The chart historically shipped
 `replicaCount: 1` against the subchart's `sentinel.quorum: 2` — a pair that can never

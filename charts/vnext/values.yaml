@@ -427,9 +427,17 @@ orchestrator:
   # Enable or disable the orchestrator service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
@@ -698,9 +706,17 @@ execution:
   # Enable or disable the execution service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using multiple replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
 
   notificationBinding:
     # Default url: "http://mockoon:3001/api/notification/send"
@@ -870,9 +886,17 @@ worker-inbox:
   # Enable or disable the worker-inbox service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
@@ -986,9 +1010,17 @@ worker-outbox:
   # Enable or disable the worker-outbox service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
