@@ -67,11 +67,17 @@ orchestrator:
   podAnnotations:
     dapr.io/config: appconfig
     # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
-    # Measured daprd: 0.6-2.0m CPU, 48-81Mi RSS.
-    dapr.io/sidecar-cpu-request: 100m
-    dapr.io/sidecar-cpu-limit: 500m
-    dapr.io/sidecar-memory-request: 128Mi
-    dapr.io/sidecar-memory-limit: 384Mi
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 20 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    dapr.io/sidecar-cpu-request: 150m
+    dapr.io/sidecar-cpu-limit: 1000m
+    dapr.io/sidecar-memory-request: 256Mi
+    dapr.io/sidecar-memory-limit: 768Mi
     # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
     # global.terminationGracePeriodSeconds (60).
     dapr.io/graceful-shutdown-seconds: "20"
@@ -96,11 +102,17 @@ execution:
   podAnnotations:
     dapr.io/config: appconfig
     # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
-    # Measured daprd: 0.6-2.0m CPU, 48-81Mi RSS.
-    dapr.io/sidecar-cpu-request: 100m
-    dapr.io/sidecar-cpu-limit: 500m
-    dapr.io/sidecar-memory-request: 128Mi
-    dapr.io/sidecar-memory-limit: 384Mi
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 20 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    dapr.io/sidecar-cpu-request: 150m
+    dapr.io/sidecar-cpu-limit: 1000m
+    dapr.io/sidecar-memory-request: 256Mi
+    dapr.io/sidecar-memory-limit: 768Mi
     # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
     # global.terminationGracePeriodSeconds (60).
     dapr.io/graceful-shutdown-seconds: "20"
@@ -125,11 +137,17 @@ worker-inbox:
   podAnnotations:
     dapr.io/config: appconfig
     # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
-    # Measured daprd: 0.6-2.0m CPU, 48-81Mi RSS.
-    dapr.io/sidecar-cpu-request: 100m
-    dapr.io/sidecar-cpu-limit: 500m
-    dapr.io/sidecar-memory-request: 128Mi
-    dapr.io/sidecar-memory-limit: 384Mi
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 20 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    dapr.io/sidecar-cpu-request: 150m
+    dapr.io/sidecar-cpu-limit: 1000m
+    dapr.io/sidecar-memory-request: 256Mi
+    dapr.io/sidecar-memory-limit: 768Mi
     # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
     # global.terminationGracePeriodSeconds (60).
     dapr.io/graceful-shutdown-seconds: "20"
@@ -154,11 +172,17 @@ worker-outbox:
   podAnnotations:
     dapr.io/config: appconfig
     # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
-    # Measured daprd: 0.6-2.0m CPU, 48-81Mi RSS.
-    dapr.io/sidecar-cpu-request: 100m
-    dapr.io/sidecar-cpu-limit: 500m
-    dapr.io/sidecar-memory-request: 128Mi
-    dapr.io/sidecar-memory-limit: 384Mi
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 20 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd also now holds up to poolSize x 5 components Redis connections per sidecar.
+    dapr.io/sidecar-cpu-request: 150m
+    dapr.io/sidecar-cpu-limit: 1000m
+    dapr.io/sidecar-memory-request: 256Mi
+    dapr.io/sidecar-memory-limit: 768Mi
     # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
     # global.terminationGracePeriodSeconds (60).
     dapr.io/graceful-shutdown-seconds: "20"

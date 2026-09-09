@@ -163,11 +163,26 @@ Sidecar sizing is an environment concern by chart design (the chart does not emi
 
 | | low | normal | high |
 |---|---|---|---|
-| `sidecar-cpu-request` / `-limit` | 50m / 200m | 50m / 300m | 100m / 500m |
-| `sidecar-memory-request` / `-limit` | 96Mi / 256Mi | 96Mi / 256Mi | 128Mi / 384Mi |
+| `sidecar-cpu-request` / `-limit` | 50m / 200m | 100m / 500m | 150m / 1000m |
+| `sidecar-memory-request` / `-limit` | 96Mi / 384Mi | 200Mi / 512Mi | 256Mi / 768Mi |
 
-Measured daprd is 0.6–2.0m CPU and 48–81Mi RSS, so the 128Mi request the environments
-previously used was roughly 2x actual.
+**These are deliberately well above the measured idle figure, and that is the point.**
+daprd at rest is only 0.6–2.0m CPU and 48–81Mi RSS, but idle RSS is the wrong basis for
+sizing it: the chart emits `dapr.io/max-body-size: 64Mi`, so a **single** in-flight body
+can add ~64Mi to the sidecar's working set, and each profile allows 5 / 10 / 20 concurrent
+pub/sub handler invocations respectively. Two rules follow:
+
+- the memory **request** stays above `baseline + one 64Mi body`, so the sidecar does not
+  become the first eviction candidate on a pod that sits on every request path;
+- the memory **limit** covers several concurrent bodies. A 256Mi limit tolerates only two
+  before OOM, which is why even `low` is at 384Mi.
+
+daprd also now holds up to `poolSize x 5 components` Redis connections per sidecar, each
+with its own read/write buffers.
+
+CPU limits do not reserve node capacity, so they are cheap headroom. CPU and memory
+**requests** do reserve, and the sidecar is multiplied by every pod — see the cost note
+below before raising them further.
 
 `dapr.io/graceful-shutdown-seconds` is an **integer** (`"20s"` fails to parse, silently);
 `dapr.io/block-shutdown-duration` is a Go **duration** (`"30s"`). Their sum must fit
@@ -191,9 +206,20 @@ Comparing the resource *shape* alone, at the replica floor production runs today
 
 At the `normal` profile's own floor (21 app pods) it is **4.9 CPU** — still well below
 today's 8.0 despite 31% more pods — and **10.6Gi** memory, up from 8.0Gi. That memory
-increase is entirely the doubled orchestrator count plus raising its request above
-measured RSS: a deliberate trade of memory for stability, not an accident. Across 50
-domains the CPU saving is roughly **150–230 CPU** depending on the profile mix.
+increase is the doubled orchestrator count plus raising its request above measured RSS: a
+deliberate trade of memory for stability, not an accident.
+
+**The sidecars are not free, and they scale with pod count.** At the `normal` floor of 21
+pods, `100m / 200Mi` requests add **2.1 CPU and 4.1Gi per domain** (at the HPA ceiling of
+53 pods: 5.3 CPU and 10.4Gi). That is roughly double what a `50m / 96Mi` sidecar would
+reserve, and it eats into the app-side CPU saving: net saving at the `normal` floor is
+about **2 CPU per domain** rather than 3.1. The trade is deliberate — an OOMKilled or
+CPU-starved sidecar takes the whole pod's traffic with it, and a BestEffort daprd was the
+primary suspect in the intprod 40 ms sidecar→app latency finding — but if you are
+capacity-constrained, the sidecar **requests** are the first place to look, not the limits.
+
+Across 50 domains the app-side CPU saving is roughly **150–230 CPU** depending on the
+profile mix; sidecar requests give back about **50 CPU** of that at `normal`.
 
 ## Risks and known defects
 

@@ -62,9 +62,12 @@ starting point:
 podAnnotations:
   dapr.io/config: appconfig
   dapr.io/sidecar-cpu-request: "50m"
-  dapr.io/sidecar-cpu-limit: "200m"        # raise to 300m if invoke tail latency persists
-  dapr.io/sidecar-memory-request: "96Mi"   # measured 48-81Mi on bmprod 2026-09-09
-  dapr.io/sidecar-memory-limit: "256Mi"    # raise to 512Mi if 64Mi payloads are common
+  dapr.io/sidecar-cpu-limit: "200m"        # raise to 500m if invoke tail latency persists
+  dapr.io/sidecar-memory-request: "96Mi"   # idle RSS is 48-81Mi (bmprod 2026-09-09), but
+                                           # ONE in-flight 64Mi body adds ~64Mi on top --
+                                           # hold the request above baseline+one body
+  dapr.io/sidecar-memory-limit: "384Mi"    # 256Mi tolerates only two concurrent 64Mi
+                                           # bodies before OOM; see SIZING_PROFILES.md
   dapr.io/graceful-shutdown-seconds: "20"  # INTEGER — "20s" fails to parse (silently)
   dapr.io/block-shutdown-duration: "30s"   # Go DURATION — unlike the integer above
 ```
