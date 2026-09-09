@@ -1350,8 +1350,24 @@ redis-sentinel:
     network:
       maxClients: 1000
 
+    # DISABLED ON PURPOSE -> emptyDir, no PVC. This Redis has always been diskless in
+    # practice: redis.extraConfig above sets `appendonly no` and `save ""`, and
+    # extraConfig is emitted LAST so it wins over the persistence block. The PVC was
+    # therefore 8Gi per node that Redis never wrote to (~1.2Ti across 50 domains at 3
+    # nodes each), while giving a false impression of durability. Nothing became less
+    # durable by turning this off. /data still holds sentinel.conf, which
+    # start-sentinel.sh regenerates by discovering the master from its peers.
+    #
+    # UPGRADING AN EXISTING RELEASE IS NOT A VALUES FLIP. volumeClaimTemplates is
+    # IMMUTABLE on a live StatefulSet, so `helm upgrade` fails with a Forbidden error
+    # until the StatefulSet is deleted first. See the migration procedure in
+    # docs/SIZING_PROFILES.md before rolling this out.
+    #
+    # Re-enabling needs real persistence too: set redis.persistenceMode (aof / rdb /
+    # aof-rdb) so the mode owns the directives, rather than flipping this alone and
+    # leaving extraConfig to override it back to diskless.
     persistence:
-      enabled: true
+      enabled: false
       size: 8Gi
       storageClass: ""
       accessMode: ReadWriteOnce

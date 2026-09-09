@@ -21,6 +21,11 @@ helm upgrade --install vnext-<domain> oci://ghcr.io/burgan-tech/vnext/vnext \
 Start at `low` and move up on **evidence**, not expectation. Moving a domain up is a
 values change and a rollout; it is not expensive to do later.
 
+> **Upgrading an existing release?** `redis-sentinel.redis.persistence.enabled` is now
+> `false` (the PVC was never written to — Risk 3). Because `volumeClaimTemplates` is
+> immutable, `helm upgrade` **fails** until the Redis StatefulSet is deleted. Follow
+> [the migration procedure](#migrating-an-existing-release-off-the-redis-pvc) first.
+
 ## The measured baseline (since chart > 1.0.109)
 
 Measured on `bmprod` / `intprod-vnext-contract` — the highest-volume vNext domain by log
@@ -242,12 +247,17 @@ These are **not** fixed by this change. Read before rolling out.
    have never taken effect. Left as-is deliberately; fixing the nesting would change
    runtime behaviour and needs its own change.
 
-3. **Redis is effectively diskless despite holding a PVC.** `redis.extraConfig` sets
-   `appendonly no` and `save ""`, and extraConfig is emitted **last**, so it wins over
-   the persistence block — while `persistence.enabled: true` still binds **3 x 8Gi per
-   domain (~1.2Ti across 50 domains)** that Redis never writes to. A quorum loss
-   discards all state *and* all in-flight pub/sub streams. Acceptable only if every
-   event is re-derivable from Postgres via the outbox.
+3. **Redis is diskless — now explicitly.** `redis.extraConfig` sets `appendonly no` and
+   `save ""`, and extraConfig is emitted **last**, so it wins over the persistence block.
+   This was always the effective behaviour; the difference is that
+   `persistence.enabled` is now `false` to match, instead of binding 3 x 8Gi per domain
+   (~1.2Ti across 50) that Redis never wrote to. **Nothing became less durable** — but
+   the standing consequence is unchanged and worth stating plainly: **a quorum loss
+   discards all cache state and all in-flight pub/sub streams.** That is only acceptable
+   because every event is re-derivable from Postgres via the outbox. If that ever stops
+   being true, turn on real persistence via `redis.persistenceMode` (not by flipping
+   `persistence.enabled` alone, which extraConfig would override straight back).
+   Migrating an existing release requires the StatefulSet procedure below.
 
 4. **`maxmemory-policy: noeviction` is a write-failure cliff, not an eviction policy.**
    At `maxmemory`, Redis **rejects writes** rather than evicting. Safe today (~84Mi
@@ -286,8 +296,14 @@ Reconcile that first, then:
    `global.externalVault.*`, ingress hosts, `appEnvConfig`.
 4. Diff before applying: `helm template ... > new.yaml` against the current release.
 
-**This upgrade restarts Redis.** The `redis.conf` contents change (`maxclients` is added,
-and `maxmemory` moves with the memory limit), which changes the StatefulSet's
+**This upgrade needs the PVC migration first.** `persistence.enabled` is now `false`, and
+`volumeClaimTemplates` is immutable on a live StatefulSet, so `helm upgrade` against an
+existing release **fails** until you follow
+[Migrating an existing release off the Redis PVC](#migrating-an-existing-release-off-the-redis-pvc).
+Do that before anything below.
+
+**This upgrade also restarts Redis.** The `redis.conf` contents change (`maxclients` is
+added, and `maxmemory` moves with the memory limit), which changes the StatefulSet's
 `checksum/config` and `checksum/scripts` annotations and therefore rolls the Redis pods.
 On a 3-node prod topology that means one Sentinel-driven failover; on a nonprod
 single-node topology it is a brief full outage of that domain's cache and pub/sub. Because
@@ -295,6 +311,79 @@ Redis is effectively diskless (Risk 3), **anything in Redis at that moment is lo
 schedule it accordingly, and confirm in-flight work is drained or replayable first.
 
 The app Deployments also roll, since their `resources` and `podAnnotations` change.
+
+## Migrating an existing release off the Redis PVC
+
+`persistence.enabled` moved from `true` to `false` (see Risk 3). **This is not a values
+flip.** `volumeClaimTemplates` is immutable on a live StatefulSet, so `helm upgrade`
+against an existing release fails with:
+
+```
+Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals',
+'template', 'updateStrategy', 'persistentVolumeClaimRetentionPolicy' and
+'minReadySeconds' are forbidden
+```
+
+The StatefulSet must be deleted first. Doing so takes that domain's Redis fully down, so
+**all cache state and all in-flight pub/sub streams are lost** — which is survivable only
+because Redis was already non-durable and events replay from Postgres via the outbox.
+Confirm that before you start, and do one domain at a time.
+
+Substitute `<ns>` and `<rel>` (the Helm release, e.g. `vnext-contract`):
+
+```bash
+# 0. Record what you have, so a rollback is mechanical rather than reconstructed.
+helm get values <rel> -n <ns> > /tmp/<rel>-values-backup.yaml
+oc -n <ns> get sts <rel>-redis-sentinel -o yaml > /tmp/<rel>-sts-backup.yaml
+oc -n <ns> get pvc | grep <rel>-redis-sentinel
+
+# 1. Drain: stop the apps writing before Redis disappears, so fewer messages are
+#    in flight at the cut. Skip only if you accept the larger replay.
+oc -n <ns> scale deploy/<rel>-worker-inbox deploy/<rel>-worker-outbox --replicas=0
+
+# 2. Delete the StatefulSet AND its pods. This is the step helm cannot do for you.
+oc -n <ns> delete sts <rel>-redis-sentinel --cascade=foreground
+
+# 3. Reclaim the storage. PVCs from a volumeClaimTemplate are NOT garbage-collected,
+#    and they carry no chart labels, so delete them by name (one per ordinal --
+#    3 in prod, 1 in nonprod).
+oc -n <ns> delete pvc data-<rel>-redis-sentinel-0 \
+                      data-<rel>-redis-sentinel-1 \
+                      data-<rel>-redis-sentinel-2
+
+# 4. Upgrade. The StatefulSet is recreated with an emptyDir.
+helm upgrade <rel> oci://ghcr.io/burgan-tech/vnext/vnext -n <ns> \
+  -f charts/vnext/profiles/values-<profile>.yaml -f <your-domain-values>.yaml
+
+# 5. Verify: no volumeClaimTemplates, no PVCs, and a healthy master/replica set.
+oc -n <ns> get sts <rel>-redis-sentinel -o jsonpath='{.spec.volumeClaimTemplates}'; echo
+oc -n <ns> get pvc | grep <rel>-redis-sentinel || echo "no PVCs - reclaimed"
+oc -n <ns> rollout status sts/<rel>-redis-sentinel
+oc -n <ns> exec <rel>-redis-sentinel-0 -c redis -- \
+  redis-cli -a "$REDIS_PASSWORD" info replication | grep -E "role|connected_slaves"
+
+# 6. Restore the workers.
+oc -n <ns> scale deploy/<rel>-worker-inbox deploy/<rel>-worker-outbox --replicas=3
+```
+
+**Rollback.** Because Redis was never durable, rolling back loses nothing that step 2 had
+not already discarded: re-run steps 2 and 4 with
+`--set redis-sentinel.redis.persistence.enabled=true`, and fresh empty PVCs are created.
+There is no data to restore, which is the whole point of Risk 3.
+
+**Sanity check before starting:** confirm this release really is diskless, so you are not
+deleting a PVC that something wrote to.
+
+```bash
+oc -n <ns> exec <rel>-redis-sentinel-0 -c redis -- \
+  redis-cli -a "$REDIS_PASSWORD" config get appendonly save
+# expect: appendonly "no"   and   save ""
+oc -n <ns> exec <rel>-redis-sentinel-0 -c redis -- ls -la /data
+# expect: no dump.rdb and no appendonlydir - only sentinel.conf
+```
+
+If either check disagrees, **stop**: that release is persisting data and needs the
+`redis.persistenceMode` route instead.
 
 ## Verification
 
