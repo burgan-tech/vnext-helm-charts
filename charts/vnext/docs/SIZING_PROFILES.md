@@ -120,7 +120,7 @@ whenever `autoscaling.enabled` is true, so `helm upgrade` never fights the HPA.
 | execution | 2, HPA off | 2 / 6 | 5 / 15 | 10 / 30 |
 | worker-inbox | 2, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
 | worker-outbox | 2, HPA off | 1 / 4 | 3 / 9 | 6 / 18 |
-| redis-sentinel | **1, quorum 1** | 3, quorum 2 | 3, quorum 2 | 3, quorum 2 |
+| redis-sentinel | 3, quorum 2 | 3, quorum 2 | 3, quorum 2 | 3, quorum 2 |
 
 Prod HPA targets are 75% CPU and 75% memory. HPA needs requests present to compute
 utilisation at all — every profile sets them, so this holds.
@@ -133,17 +133,33 @@ It also survives a node drain, which matters here because the chart ships **no
 PodDisruptionBudget** for the app components (Risk 8): a single replica is simply gone
 until it is rescheduled. Cost is ~0.9 CPU and ~2.8Gi of requests per nonprod domain.
 
-**Redis stays at 1 node in nonprod — do not "match" it to 2.** Two Sentinels is strictly
-worse than one: with `quorum: 2` a single node loss leaves one Sentinel, which can never
-reach quorum, so no failover happens; with `quorum: 1` two Sentinels can each elect
-themselves and split-brain. The self-consistent options are **1/1** (nonprod: no failover,
-accepted) or **3/2** (prod: real failover). There is no useful 2-node Sentinel topology.
+**Redis runs 3 nodes / quorum 2 in nonprod too**, for the same reason the app components
+run 2: a single node never exercises what production does — Sentinel failover, the
+client's `failover: true` path, the multi-host sentinel endpoint list that
+`vnext.redisEndpoint` builds from `replicaCount`, or a replica's diskless resync. It also
+makes the subchart's PodDisruptionBudget (`maxUnavailable: 1`) and the default
+`podAntiAffinity` meaningful, both of which are moot at 1 replica.
+
+Cost is 3 Redis pods instead of 1: **0.375 CPU and 1.03Gi** of requests per nonprod
+domain (**+0.25 CPU, +0.69Gi** over a single node). Note each pod runs **three**
+containers, not two — `redis` (50m/192Mi), `sentinel` (25m/32Mi) and the `metrics`
+exporter (50m/128Mi), the last of which the subchart sizes and which nothing currently
+scrapes (Risk 1).
+
+**2 nodes is never a valid topology — do not "split the difference".** With `quorum: 2` a
+single node loss leaves one Sentinel that can never reach quorum, so no failover happens;
+with `quorum: 1` both Sentinels can elect themselves and split-brain. Only **1/1** (no
+failover at all) and **3/2** are self-consistent.
+
+**Adding Redis nodes does not add connection capacity.** `maxclients` is per-node and
+clients connect to the **master**, so the master absorbs the entire
+`pods x components x poolSize` budget regardless of how many nodes exist. Scale
+`poolSize` and `maxClients` for connection pressure — never node count.
 
 **Sentinel quorum must match the node count.** The chart historically shipped
 `replicaCount: 1` against the subchart's `sentinel.quorum: 2` — a pair that can never
-elect a master. `NOTES.txt` warned; nothing blocked it. Nonprod now ships `1`/`1` and all
-prod profiles ship `3`/`2`. If you override `replicaCount`, override `quorum` to
-`(replicaCount / 2) + 1`.
+elect a master. `NOTES.txt` warned; nothing blocked it. Every profile now ships `3`/`2`.
+If you override `replicaCount`, override `quorum` to `(replicaCount / 2) + 1`.
 
 ## Resources per component
 
@@ -360,7 +376,7 @@ oc -n <ns> delete sts <rel>-redis-sentinel --cascade=foreground
 
 # 3. Reclaim the storage. PVCs from a volumeClaimTemplate are NOT garbage-collected,
 #    and they carry no chart labels, so delete them by name (one per ordinal --
-#    3 in prod, 1 in nonprod).
+#    3 in every profile now).
 oc -n <ns> delete pvc data-<rel>-redis-sentinel-0 \
                       data-<rel>-redis-sentinel-1 \
                       data-<rel>-redis-sentinel-2

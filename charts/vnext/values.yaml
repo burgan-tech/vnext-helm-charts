@@ -1345,13 +1345,22 @@ dapr:
 # Redis Sentinel configuration
 redis-sentinel:
   enabled: true
-  # NONPROD default: a single node. Sentinel's quorum MUST match, or no master can ever
-  # be elected -- the subchart defaults quorum to 2, so the historical `replicaCount: 1`
-  # here shipped a Redis that could never fail over (NOTES.txt warns but nothing blocks
-  # it). Production must use 3 nodes / quorum 2: see profiles/values-{low,normal,high}.yaml.
-  replicaCount: 1
+  # 3 nodes / quorum 2 -- the SAME topology production runs, in nonprod too. One node
+  # would be cheaper but it never exercises what prod does: Sentinel failover, the
+  # client's `failover: true` path, the multi-host sentinel endpoint list that
+  # vnext.redisEndpoint builds from this very replicaCount, or the replica's diskless
+  # resync. It also makes the subchart's PodDisruptionBudget (maxUnavailable 1) and the
+  # default podAntiAffinity meaningful, both of which are moot at 1 replica.
+  #
+  # replicaCount and quorum MUST stay consistent: quorum = (replicaCount / 2) + 1.
+  # The chart historically shipped 1 node against the subchart's default quorum of 2 --
+  # a pair that can never elect a master (NOTES.txt warns; nothing blocks it).
+  # 2 nodes is NEVER right: with quorum 2 one node loss leaves a single Sentinel that
+  # can never reach quorum, and with quorum 1 both can elect themselves and split-brain.
+  # Only 1/1 and 3/2 are self-consistent, and 1/1 gives up failover entirely.
+  replicaCount: 3
   sentinel:
-    quorum: 1
+    quorum: 2
   openshift:
     enabled: false
   

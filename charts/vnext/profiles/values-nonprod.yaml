@@ -89,11 +89,12 @@ worker-outbox:
       memory: 1Gi
 
 redis-sentinel:
-  # 1 node / quorum 1 is the only self-consistent single-node pair. It cannot fail
-  # over -- that is the trade nonprod makes. Prod profiles use 3 / 2.
-  replicaCount: 1
+  # 3 nodes / quorum 2 -- same as prod, so nonprod actually exercises Sentinel failover
+  # and the multi-host endpoint list. quorum = (replicaCount / 2) + 1; 2 nodes is never
+  # a valid topology (see values.yaml for why).
+  replicaCount: 3
   sentinel:
-    quorum: 1
+    quorum: 2
   redis:
     network:
       maxClients: 1000
