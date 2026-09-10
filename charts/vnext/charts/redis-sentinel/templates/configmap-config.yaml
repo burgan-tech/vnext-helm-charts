@@ -96,6 +96,14 @@ data:
     tcp-backlog {{ $netV.tcpBacklog }}
     timeout {{ $netV.timeout }}
     tcp-keepalive {{ $netV.tcpKeepalive }}
+    {{- if ne ($netV.maxClients | toString) "" }}
+    # Hard ceiling on concurrent client connections. Redis's own default is 10000;
+    # this exists because every Dapr sidecar in the namespace opens a pool per Redis
+    # component (state + pubsub + pubsub-broadcast + configuration + lock), so the
+    # per-domain connection count scales with POD COUNT, not with traffic. Budget:
+    # (pods) x (components) x global.dapr.redis.poolSize, plus failover reconnects.
+    maxclients {{ $netV.maxClients }}
+    {{- end }}
     {{- /* Performance. Mode-independent, and before extraConfig like the memory
          block above: a directive repeated in extraConfig still wins there.
 

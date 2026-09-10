@@ -1,0 +1,119 @@
+# =============================================================================
+# vNext sizing profile: NONPROD  (== the chart's own defaults)
+# =============================================================================
+# This file is an EXPLICIT restatement of what charts/vnext/values.yaml already
+# ships. Passing it changes nothing; it exists so the nonprod shape is written
+# down next to the prod profiles instead of being implicit, and so CI can assert
+# the two have not drifted:
+#
+#   helm template t charts/vnext                             > /tmp/default.yaml
+#   helm template t charts/vnext -f profiles/values-nonprod.yaml > /tmp/nonprod.yaml
+#   diff /tmp/default.yaml /tmp/nonprod.yaml
+#
+# Use for: dev, test, staging, and any domain with no production traffic.
+# Fixed replicas, HPA off, one Redis node.
+#
+# Do NOT use in production: a single Redis node has no failover, and one replica
+# per component means any pod restart is a full outage for that component.
+# -----------------------------------------------------------------------------
+
+global:
+  # Leave empty. A value here would flatten every component to one size, which is
+  # exactly the mistake the per-component blocks below avoid.
+  resources:
+    default: {}
+
+  dapr:
+    # Redis client pool. Per-host sum, because each sidecar loads only the components it
+    # is scoped to: orchestrator 4 (state, lock, pubsub, pubsub-broadcast), execution 2
+    # (state, pubsub), each worker 1 (pubsub), db-migrator 1 (lock).
+    #   2/2/2/2 pods -> 80 connections   (maxClients 1000)
+    redis:
+      poolSize: 5
+      minIdleConns: 1
+      idleTimeout: "5m"
+      dialTimeout: "5s"
+      readTimeout: "3s"
+      writeTimeout: "3s"
+      maxRetries: 3
+      maxRetryBackoff: "2s"
+      pubsub:
+        concurrency: 5
+        processingTimeout: "60s"
+        redeliverInterval: "30s"
+        queueDepth: 100
+        maxLenApprox: 10000
+
+orchestrator:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 640Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+execution:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+worker-inbox:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 75m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+worker-outbox:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 75m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+redis-sentinel:
+  # 3 nodes / quorum 2 -- same as prod, so nonprod actually exercises Sentinel failover
+  # and the multi-host endpoint list. quorum = (replicaCount / 2) + 1; 2 nodes is never
+  # a valid topology (see values.yaml for why).
+  replicaCount: 3
+  sentinel:
+    quorum: 2
+  redis:
+    network:
+      maxClients: 1000
+  resources:
+    redis:
+      requests:
+        cpu: 50m
+        memory: 192Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    sentinel:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi

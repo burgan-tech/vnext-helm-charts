@@ -354,6 +354,7 @@ So the only remedy is to report it, which NOTES.txt does.
 {{- if ne (get $net "tcpBacklog" | toString) "" -}}{{- $emitted = append $emitted "tcp-backlog" -}}{{- end -}}
 {{- if ne (get $net "timeout" | toString) "" -}}{{- $emitted = append $emitted "timeout" -}}{{- end -}}
 {{- if ne (get $net "tcpKeepalive" | toString) "" -}}{{- $emitted = append $emitted "tcp-keepalive" -}}{{- end -}}
+{{- if ne (get $net "maxClients" | toString) "" -}}{{- $emitted = append $emitted "maxclients" -}}{{- end -}}
 {{- if ne (get (.Values.redis.replication | default dict) "replBacklogSize" | toString) "" -}}{{- $emitted = append $emitted "repl-backlog-size" -}}{{- end -}}
 {{- if include "redis-sentinel.ioThreadsEffective" . -}}
 {{- $emitted = append $emitted "io-threads" -}}
@@ -997,6 +998,7 @@ appenddirname: ''
 tcpBacklog: 511
 timeout: 0
 tcpKeepalive: 60
+maxClients: ''
 {{- end -}}
 
 {{- define "redis-sentinel.networkValues" -}}

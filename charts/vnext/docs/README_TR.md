@@ -301,19 +301,26 @@ global:
 
 #### Varsayılan Kaynak Limitleri
 
+`global.resources.default` **bilinçli olarak boştur**. Boyutlandırma şu sırayla boş olmayan
+ilk kaynağa göre çözülür: `<component>.resources` → `global.resources.default` → chart'ın
+ölçülmüş `<component>.resourcesFallback` değerleri. Buraya değer yazmak bileşen bazlı
+ölçülmüş fallback'leri kalıcı gölgeler: Helm map-merge boş olmayan varsayılanı temizleyemez.
+
 ```yaml
 global:
   resources:
-    default:
-      limits:
-        cpu: 1000m
-        memory: 2Gi
-      requests:
-        cpu: 100m
-        memory: 256Mi
+    default: {}
 ```
 
-Her servis kendi `resources` bloğunu tanımlayarak bu varsayılan değerleri geçersiz kılabilir.
+`global.resources.default` yalnızca her bileşen için **tek** bir boyut istediğinizde
+kullanılır ve bu genellikle doğru değildir: orchestrator'ın ölçülmüş RSS'i ~530Mi, outbox
+worker'ın ~115Mi'dir. Tek bir değer worker'lara ~4 kat fazla ayırırken orchestrator'ı
+kullandığından az istekte bırakır.
+
+Bunun yerine boyutlandırma profili kullanın — bkz.
+[SIZING_PROFILES.md](SIZING_PROFILES.md). Chart varsayılanları nonprod ölçeğindedir;
+production kurulumları `-f profiles/values-{low,normal,high}.yaml` geçirir. Öncelik
+kurallarının tamamı [RESOURCE_TUNING.md](RESOURCE_TUNING.md) içindedir.
 
 #### Varsayılan Sağlık Probe Ayarları
 
@@ -847,6 +854,18 @@ orchestrator:
 
 Aynı yapı `execution`, `worker-inbox` ve `worker-outbox` servisleri için de geçerlidir.
 
+**Autoscaling açıkken `replicaCount` yok sayılır.** Bu durumda her Deployment `replicas`
+alanını tamamen atlar; ölçeği HPA yönetir ve `helm upgrade` bunu sıfırlamaz. Yani taban
+değeriniz `minReplicas`'tır — hem `replicaCount: 10` hem `autoscaling.minReplicas: 5`
+yazarsanız tabanınız 10 değil 5 olur.
+
+HPA'nın kullanım oranını hesaplayabilmesi için kaynak **request**'lerinin bulunması da
+gerekir; `resources`, `global.resources.default` ve `resourcesFallback` üçü de boşsa hiç
+`resources` bloğu render edilmez ve CPU tabanlı ölçekleme sessizce çalışmaz.
+
+Her iki durum için hazır replika ve kaynak setleri
+[SIZING_PROFILES.md](SIZING_PROFILES.md) içindedir.
+
 ## Güvenlik
 
 ### mTLS
@@ -895,7 +914,10 @@ serviceAccount:
 - [ ] Mümkün olan yerlerde `runAsNonRoot: true` ayarlayın
 - [ ] Tüm hassas yapılandırmalar için Vault kullanın
 - [ ] Geliştirme araçlarını devre dışı bırakın (`pgAdmin`, `redisInsight`, `mockoon`, `openobserve`)
-- [ ] Kaynak limitleri ve isteklerini ortamınıza uygun şekilde ayarlayın
+- [ ] Bir boyutlandırma profili uygulayın: `-f profiles/values-{low,normal,high}.yaml` — chart varsayılanları nonprod ölçeğindedir ([SIZING_PROFILES.md](SIZING_PROFILES.md))
+- [ ] `redis-sentinel.replicaCount: 3` **ve** `redis-sentinel.sentinel.quorum: 2` ayarlayın — tek düğüm failover yapamaz
+- [ ] Redis bağlantı bütçesini kontrol edin — her sidecar yalnızca scope'landığı bileşenleri yüklediği için host bazlı toplamdır ([SIZING_PROFILES.md](SIZING_PROFILES.md))
+- [ ] `daprd`'ye `podAnnotations` ile kaynak verin — BestEffort sidecar bilinen bir gecikme kaynağıdır
 - [ ] PostgreSQL şifresini `existingSecret` üzerinden yönetin
 
 ## İzleme ve Sağlık Kontrolleri
@@ -1066,10 +1088,10 @@ kubectl delete namespace vnext
 | `global.database.connectionString` | PostgreSQL bağlantı dizesi | `"Host=vnext-postgres-headless;..."` |
 | `global.database.clickhouse.enabled` | ClickHouse entegrasyonu | `false` |
 | `global.externalRedis.endpoint` | Harici Redis endpoint'i | `""` |
-| `global.resources.default.limits.cpu` | Varsayılan CPU limiti | `1000m` |
-| `global.resources.default.limits.memory` | Varsayılan bellek limiti | `2Gi` |
-| `global.resources.default.requests.cpu` | Varsayılan CPU isteği | `100m` |
-| `global.resources.default.requests.memory` | Varsayılan bellek isteği | `256Mi` |
+| `global.resources.default` | Tüm bileşenler için tek boyut. Varsayılan boştur, bileşen bazlı `resourcesFallback` uygulanır; bkz. [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
+| `global.dapr.redis.poolSize` | Sidecar'ın scope'landığı her Dapr bileşeni için Redis client pool'u (orchestrator 4, execution 2, worker 1) | `5` |
+| `global.dapr.redis.pubsub.concurrency` | Eşzamanlı pub/sub handler çağrısı üst sınırı | `5` |
+| `redis-sentinel.redis.network.maxClients` | Redis `maxclients` üst sınırı (`""` Redis'in kendi 10000 değerini korur) | `1000` |
 
 ### Servis Parametreleri
 

@@ -40,7 +40,8 @@ global:
     #         value: http://mocklab:3001/api/notification/state
 
   # Dynamic pub/sub components for event-driven workflows.
-  # Each entry renders a Dapr Component scoped to the orchestrator (vnext-<appDomain>-app) sidecar.
+  # Each entry renders a Dapr Component scoped to BOTH the orchestrator (vnext-<appDomain>-app)
+  # and the execution (vnext-<appDomain>-execution-app) sidecars -- see vnext-pubsub-template.yaml.
   # The component name is used verbatim; reference it from subscriptionComponents[].spec.pubsubname.
   pubsubComponents: []
     # - name: kafka-events
@@ -195,6 +196,89 @@ global:
     # Deprecated upstream; empty = not emitted. Set only for environments pinned
     # to an old sidecar.
     httpMaxRequestSize: ""
+    # ---------------------------------------------------------------------------
+    # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, lock)
+    # ---------------------------------------------------------------------------
+    # THE CONNECTION-POOL KNOB. Left unset, the go-redis client inside daprd sizes
+    # its pool from GOMAXPROCS — the NODE's core count, not the sidecar's CPU limit.
+    # On 64-core workers that is hundreds of connections per component.
+    #
+    # The budget is a PER-HOST SUM, not pods x components, because each sidecar now
+    # loads only the components it actually consumes (see scopes below):
+    #
+    #   budget = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+    #
+    #   orchestrator  4   state, lock, pubsub, pubsub-broadcast
+    #   execution     2   state, pubsub
+    #   worker-inbox  1   pubsub
+    #   worker-outbox 1   pubsub
+    #   db-migrator   1   lock   (a Job -- transient, but it does hold a pool)
+    #
+    # Keep the total under redis-sentinel.redis.network.maxClients with room for the
+    # reconnect burst that follows a Sentinel failover (roughly double the steady
+    # figure). Worked numbers per profile are in docs/SIZING_PROFILES.md.
+    # These defaults are NONPROD-sized; see profiles/values-{low,normal,high}.yaml.
+    # Setting a key to "" omits it, handing that setting back to the client's own
+    # default -- which for poolSize means the unbounded pre-1.0.110 behaviour, so
+    # don't, unless you are debugging. Note `null` will NOT clear these: Helm's
+    # coalesce restores the chart default over a null, so use "" instead.
+    redis:
+      poolSize: 5
+      minIdleConns: 1
+      idleTimeout: "5m"
+      dialTimeout: "5s"
+      readTimeout: "3s"
+      writeTimeout: "3s"
+      maxRetries: 3
+      maxRetryBackoff: "2s"
+      # pub/sub only. concurrency bounds in-flight handler invocations;
+      # maxLenApprox caps stream length, which matters because maxmemory-policy is
+      # noeviction — a full Redis REJECTS writes rather than evicting old entries.
+      pubsub:
+        concurrency: 5
+        processingTimeout: "60s"
+        redeliverInterval: "30s"
+        queueDepth: 100
+        maxLenApprox: 10000
+      # Which app-ids load each component. The chart ships an evidence-backed
+      # DEFAULT -- these are no longer opt-in, and leaving this empty does NOT mean
+      # "load everywhere" any more:
+      #
+      #   state            orchestrator, execution
+      #   lock             orchestrator, db-migrator
+      #   pubsub           orchestrator, execution, worker-inbox, worker-outbox
+      #   pubsubBroadcast  orchestrator
+      #
+      # Derived from vnext/docs/runtime/dapr-component-footprint.md, which maps each
+      # building block to the consumption points in code. An unscoped component is
+      # loaded by every sidecar in the namespace and costs a Redis pool on each one,
+      # which is what exhausted Redis before this was scoped.
+      #
+      # Override REPLACES a component's list (it does not merge). Use full app-ids;
+      # an explicit empty list restores unscoped load-everywhere behaviour:
+      #   scopes:
+      #     pubsub: ["vnext-<domain>-app", "vnext-<domain>-worker-inbox-app"]
+      #
+      # execution is in `pubsub` by default even though only domain-authored
+      # DaprPubSubTasks use it: an execution sidecar outside the scope fails when
+      # such a task first runs (at runtime, not at render), and one pool per
+      # execution pod is cheap insurance. Drop it here once you have confirmed no
+      # domain publishes from a task.
+      #
+      # Keys: state | pubsub | pubsubBroadcast | lock
+      # The `configuration` component was DELETED -- no code calls the Dapr
+      # Configuration API. The secretstore is deliberately unscoped (every Redis
+      # component names it as auth.secretStore, and it is create-once).
+      scopes: {}
+    # Sidecar log format -> dapr.io/log-as-json. daprd defaults to plain text; JSON keeps
+    # the sidecar's own logs parseable in Elastic next to the app's structured logs.
+    # This is the SIDECAR setting. It is NOT the same as the vendored subchart's
+    # dapr.global.logAsJson (values.yaml, under the top-level `dapr:` key), which
+    # configures the Dapr CONTROL PLANE and never reaches these pods.
+    # Set false for local/dev if you prefer human-readable sidecar logs -- an explicit
+    # false is honoured (the helper guards with kindIs "invalid", not `default`, which
+    # would treat false as unset).
+    logAsJson: true
     # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
     # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
     # dapr.io/graceful-shutdown-seconds (INTEGER, e.g. "20" — "20s" fails to parse) and
@@ -383,9 +467,17 @@ orchestrator:
   # Enable or disable the orchestrator service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
@@ -488,10 +580,13 @@ orchestrator:
   # below. Set a non-empty block here to override both.
   resources: {}
 
-  # Chart-managed measured default (bmprod, 2026-08-31): steady RSS 440-475Mi, idle CPU ~1m.
-  # Requests sized to actual steady-state so the scheduler and cpu.shares reflect reality;
-  # CPU limit 2 (not 1) keeps .NET Server GC enabled (ProcessorCount >= 2). Limits do not
-  # reserve node capacity. Do not edit from an environment — use resources or
+  # Chart-managed measured default. Re-measured bmprod/intprod-vnext-contract 2026-09-09:
+  # steady RSS 520-541Mi across 5 pods, idle CPU 1.0-1.4m. The memory request was 512Mi,
+  # i.e. BELOW steady-state RSS, which made the orchestrator the first pod evicted under
+  # node memory pressure despite being the request-facing component; 640Mi puts the request
+  # above measured RSS. (The earlier 440-475Mi figure was taken 2026-08-31, before the
+  # workload grew.) CPU limit 2 (not 1) keeps .NET Server GC enabled (ProcessorCount >= 2).
+  # Limits do not reserve node capacity. Do not edit from an environment — use resources or
   # global.resources.default instead.
   resourcesFallback:
     limits:
@@ -499,7 +594,7 @@ orchestrator:
       memory: 2Gi
     requests:
       cpu: 200m
-      memory: 512Mi
+      memory: 640Mi
   
   # Health check probes (uses global.probes if not specified)
   livenessProbe:
@@ -651,9 +746,17 @@ execution:
   # Enable or disable the execution service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using multiple replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
 
   notificationBinding:
     # Default url: "http://mockoon:3001/api/notification/send"
@@ -823,9 +926,17 @@ worker-inbox:
   # Enable or disable the worker-inbox service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
@@ -847,7 +958,7 @@ worker-inbox:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-worker-inbox-app)
     # Used for service discovery and pub/sub
     appId: ""
     # Port that the application listens on
@@ -939,9 +1050,17 @@ worker-outbox:
   # Enable or disable the worker-outbox service
   enabled: true
   
-  # Number of replicas to deploy
-  # For production, consider using 3+ replicas with autoscaling
-  replicaCount: 1
+  # Number of replicas to deploy. NONPROD default: 2, not 1.
+  # Two is the minimum that exercises the multi-instance code paths production actually
+  # runs -- competing consumers on the Redis pub/sub streams, distributed locks, cache
+  # invalidation races. At 1 replica nonprod never reaches them while prod runs 10/5/3/3,
+  # which is exactly how multi-instance bugs get to production. It also survives a node
+  # drain: this chart ships no PodDisruptionBudget for the app components, so a single
+  # replica is simply gone until it is rescheduled.
+  # Production sets these through a sizing profile's HPA floor (replicaCount is ignored
+  # once autoscaling is on) -- see profiles/values-{low,normal,high}.yaml and
+  # docs/SIZING_PROFILES.md.
+  replicaCount: 2
   
   # Container image configuration
   image:
@@ -963,7 +1082,7 @@ worker-outbox:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-worker-outbox-app)
     # Used for service discovery and pub/sub
     appId: ""
     # Port that the application listens on
@@ -1166,7 +1285,7 @@ db-migrator:
   dapr:
     # Enable Dapr sidecar injection for this service
     enabled: true
-    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-app)
+    # Dapr application ID (if empty, auto-generated as: vnext-<domain>-db-migrator-app)
     # Used for service discovery and pub/sub
     appId: ""
 
@@ -1266,7 +1385,22 @@ dapr:
 # Redis Sentinel configuration
 redis-sentinel:
   enabled: true
-  replicaCount: 1
+  # 3 nodes / quorum 2 -- the SAME topology production runs, in nonprod too. One node
+  # would be cheaper but it never exercises what prod does: Sentinel failover, the
+  # client's `failover: true` path, the multi-host sentinel endpoint list that
+  # vnext.redisEndpoint builds from this very replicaCount, or the replica's diskless
+  # resync. It also makes the subchart's PodDisruptionBudget (maxUnavailable 1) and the
+  # default podAntiAffinity meaningful, both of which are moot at 1 replica.
+  #
+  # replicaCount and quorum MUST stay consistent: quorum = (replicaCount / 2) + 1.
+  # The chart historically shipped 1 node against the subchart's default quorum of 2 --
+  # a pair that can never elect a master (NOTES.txt warns; nothing blocks it).
+  # 2 nodes is NEVER right: with quorum 2 one node loss leaves a single Sentinel that
+  # can never reach quorum, and with quorum 1 both can elect themselves and split-brain.
+  # Only 1/1 and 3/2 are self-consistent, and 1/1 gives up failover entirely.
+  replicaCount: 3
+  sentinel:
+    quorum: 2
   openshift:
     enabled: false
   
@@ -1290,8 +1424,31 @@ redis-sentinel:
       lazyfree-lazy-user-del yes
       replica-lazy-flush yes
     
+    # Connection ceiling. Scales with POD count, not traffic: each Dapr sidecar opens one
+    # pool per Redis component (state + pubsub + pubsub-broadcast + configuration + lock).
+    # Budget = pods x components x global.dapr.redis.poolSize + failover headroom.
+    # Nonprod (4 app pods, poolSize 5) needs ~100; 1000 leaves a wide margin.
+    network:
+      maxClients: 1000
+
+    # DISABLED ON PURPOSE -> emptyDir, no PVC. This Redis has always been diskless in
+    # practice: redis.extraConfig above sets `appendonly no` and `save ""`, and
+    # extraConfig is emitted LAST so it wins over the persistence block. The PVC was
+    # therefore 8Gi per node that Redis never wrote to (~1.2Ti across 50 domains at 3
+    # nodes each), while giving a false impression of durability. Nothing became less
+    # durable by turning this off. /data still holds sentinel.conf, which
+    # start-sentinel.sh regenerates by discovering the master from its peers.
+    #
+    # UPGRADING AN EXISTING RELEASE IS NOT A VALUES FLIP. volumeClaimTemplates is
+    # IMMUTABLE on a live StatefulSet, so `helm upgrade` fails with a Forbidden error
+    # until the StatefulSet is deleted first. See the migration procedure in
+    # docs/SIZING_PROFILES.md before rolling this out.
+    #
+    # Re-enabling needs real persistence too: set redis.persistenceMode (aof / rdb /
+    # aof-rdb) so the mode owns the directives, rather than flipping this alone and
+    # leaving extraConfig to override it back to diskless.
     persistence:
-      enabled: true
+      enabled: false
       size: 8Gi
       storageClass: ""
       accessMode: ReadWriteOnce
@@ -1324,21 +1481,28 @@ redis-sentinel:
               matchLabels:
                 app.kubernetes.io/name: redis-sentinel
   
+  # NONPROD sizing. Measured bmprod/intprod-vnext-contract 2026-09-09 (the busiest vNext
+  # domain): redis 12-17m CPU / 58-84Mi RSS, sentinel 12.8-13.4m / 11-12Mi. Redis is
+  # effectively idle at every observed load -- the bottleneck is CONNECTION COUNT, not
+  # CPU or memory, so tune global.dapr.redis.poolSize and network.maxClients rather than
+  # these. NOTE resources.redis.limits.memory is also the maxmemory knob: maxmemory
+  # derives as 0.78 x that limit unless redis.maxMemory is set, so 1Gi => ~800mb against
+  # an ~84Mi dataset. The previous 3Gi limit meant ~2.4Gi of maxmemory for nothing.
   resources:
     redis:
       limits:
-        cpu: 1000m
-        memory: 3Gi
+        cpu: 500m
+        memory: 1Gi
       requests:
-        cpu: 100m
-        memory: 256Mi
+        cpu: 50m
+        memory: 192Mi
     sentinel:
       limits:
         cpu: 200m
         memory: 256Mi
       requests:
-        cpu: 50m
-        memory: 64Mi
+        cpu: 25m
+        memory: 32Mi
   
   metrics:
     enabled: true
