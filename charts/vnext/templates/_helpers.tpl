@@ -139,7 +139,7 @@ Usage: {{ include "vnext.resources" (dict "component" .Values.orchestrator "glob
 
 {{/*
 Generate Dapr pod annotations
-Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol) }}
+Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "logAsJson" .Values.global.dapr.logAsJson) }}
 */}}
 {{- define "vnext.daprAnnotations" -}}
 {{- if and .dapr.enabled .enabled -}}
@@ -161,6 +161,16 @@ dapr.io/app-port: {{ .dapr.appPort | quote }}
      fallback (not a hardcoded "http") so that global value is not dead config. Callers
      that don't pass "globalProtocol" still land on "http" via the final default. */}}
 dapr.io/app-protocol: {{ .dapr.protocol | default .globalProtocol | default "http" | quote }}
+{{- end }}
+{{/* Sidecar log format. daprd defaults to plain text; JSON is what makes the sidecar's
+     own logs parseable in Elastic alongside the app's structured logs (the app already
+     ships OTLP/console via global.telemetry.logging). Distinct from dapr.global.logAsJson
+     in the vendored subchart, which is the CONTROL PLANE's setting and does not reach
+     these sidecars.
+     Guarded with kindIs "invalid" rather than `default`/`coalesce`: this is a BOOLEAN, and
+     both of those treat false as empty, which would silently ignore an explicit false. */}}
+{{- if not (kindIs "invalid" .logAsJson) }}
+dapr.io/log-as-json: {{ .logAsJson | quote }}
 {{- end }}
 {{/* Preferred body-size annotation (Dapr >= 1.13, resource-quantity string e.g. "64Mi").
      The legacy MB-integer annotation below is deprecated but still emitted when a user

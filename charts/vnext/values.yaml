@@ -270,6 +270,15 @@ global:
       # Configuration API. The secretstore is deliberately unscoped (every Redis
       # component names it as auth.secretStore, and it is create-once).
       scopes: {}
+    # Sidecar log format -> dapr.io/log-as-json. daprd defaults to plain text; JSON keeps
+    # the sidecar's own logs parseable in Elastic next to the app's structured logs.
+    # This is the SIDECAR setting. It is NOT the same as the vendored subchart's
+    # dapr.global.logAsJson (values.yaml, under the top-level `dapr:` key), which
+    # configures the Dapr CONTROL PLANE and never reaches these pods.
+    # Set false for local/dev if you prefer human-readable sidecar logs -- an explicit
+    # false is honoured (the helper guards with kindIs "invalid", not `default`, which
+    # would treat false as unset).
+    logAsJson: true
     # Dapr sidecar (daprd) sizing and shutdown behavior are NOT chart concerns: supply
     # dapr.io/sidecar-cpu-request/-cpu-limit/-memory-request/-memory-limit,
     # dapr.io/graceful-shutdown-seconds (INTEGER, e.g. "20" — "20s" fails to parse) and
