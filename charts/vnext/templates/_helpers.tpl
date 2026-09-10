@@ -192,8 +192,8 @@ name set on a host whose sidecar does NOT load that component resolves to nothin
 and fails only at first use. DAPR_SECRET_STORE_NAME stays here: every host reads it
 when Vault is on, and the secretstore component is deliberately unscoped.
 
-DAPR_PUBSUB_BROADCAST_STORE_NAME is gone entirely -- no runtime C# reads it (it
-survives only in the runtime repo's launchSettings.json / .vscode/tasks.json).
+DAPR_PUBSUB_BROADCAST_STORE_NAME moved there too, narrowed from all five hosts to
+the orchestrator alone -- the only host the pubsub-broadcast component is scoped to.
 Usage: {{ include "vnext.commonEnvVars" . }}
 */}}
 {{- define "vnext.commonEnvVars" -}}
@@ -226,6 +226,16 @@ prove nothing):
                           DaprResourceLockService), db-migrator (SchemaMigrationRunner)
   DAPR_PUBSUB_STORE_NAME  orchestrator (OutboxWakeupEvent publish), execution
                           (domain-authored DaprPubSubTask), both workers (subscribe)
+  DAPR_PUBSUB_BROADCAST_STORE_NAME
+                          orchestrator ONLY -- and deliberately kept even though no
+                          runtime C# reads it yet (it survives in the runtime repo's
+                          launchSettings.json / .vscode/tasks.json). The
+                          pubsub-broadcast component is held on the orchestrator for
+                          a planned pod-to-pod invalidation path; the component and
+                          the name that resolves it have to be kept or dropped
+                          TOGETHER, or the orchestrator ends up with a component it
+                          cannot address. It was previously emitted for all five
+                          hosts, four of which never load the component.
 
 Usage: {{ include "vnext.daprStoreEnvVars" (dict "root" . "component" "worker-inbox") }}
 */}}
@@ -240,6 +250,9 @@ DAPR_LOCK_STORE_NAME: {{ printf "%s-redis-lock" $full | quote }}
 {{- end }}
 {{- if has $c (list "orchestrator" "execution" "worker-inbox" "worker-outbox") }}
 DAPR_PUBSUB_STORE_NAME: {{ printf "%s-pubsub" $full | quote }}
+{{- end }}
+{{- if has $c (list "orchestrator") }}
+DAPR_PUBSUB_BROADCAST_STORE_NAME: {{ printf "%s-pubsub-broadcast" $full | quote }}
 {{- end }}
 {{- end }}
 

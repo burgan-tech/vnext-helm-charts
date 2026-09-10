@@ -113,7 +113,7 @@ deleted outright:
 | `state` | orchestrator, execution | platform cache; `StateStoreTask`/`CacheAsideTask` fall back to it |
 | `lock` | orchestrator, **db-migrator** | `InstanceStatusLock` etc.; `SchemaMigrationRunner` |
 | `pubsub` | orchestrator, execution, both workers | outbox nudge, subscriptions, domain tasks |
-| `pubsub-broadcast` | orchestrator | held for a planned invalidation path; unused elsewhere |
+| `pubsub-broadcast` | orchestrator | held for a planned invalidation path; `DAPR_PUBSUB_BROADCAST_STORE_NAME` is emitted on the orchestrator so it can address it |
 | `configuration` | **deleted** | no code calls the Dapr Configuration API |
 | `secretstore` | everyone (unscoped) | every Redis component's `auth.secretStore` |
 
@@ -121,6 +121,23 @@ That is the source of the numbers above: 4 components on the orchestrator, 2 on
 execution, 1 on each worker. The mapping comes from
 `vnext/docs/runtime/dapr-component-footprint.md`, which derives it from **consumption
 points in code** rather than DI registrations (a registration is lazy and proves nothing).
+
+**A component and the env name that resolves it must be kept or dropped together.** Each
+`DAPR_*_STORE_NAME` is emitted only on the hosts scoped to the matching component, so the
+env matrix is a mirror image of the table above:
+
+| Key | orchestrator | execution | worker-inbox | worker-outbox | db-migrator |
+|---|---|---|---|---|---|
+| `DAPR_STATE_STORE_NAME` | ✅ | ✅ | — | — | — |
+| `DAPR_LOCK_STORE_NAME` | ✅ | — | — | — | ✅ |
+| `DAPR_PUBSUB_STORE_NAME` | ✅ | ✅ | ✅ | ✅ | — |
+| `DAPR_PUBSUB_BROADCAST_STORE_NAME` | ✅ | — | — | — | — |
+
+Both failure directions are silent until first use: a host holding a name whose component
+its sidecar cannot serve, and a host scoped to a component it has no name for. CI asserts
+both matrices. `DAPR_PUBSUB_BROADCAST_STORE_NAME` is kept even though no runtime C# reads
+it *yet* — the component is deliberately held for a planned path, so dropping the name
+would leave the orchestrator unable to address a component it loads.
 
 Two traps worth knowing before you edit `scopes`:
 
