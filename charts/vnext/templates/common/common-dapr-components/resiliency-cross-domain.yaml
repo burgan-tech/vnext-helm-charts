@@ -1,0 +1,61 @@
+{{- if .Values.orchestrator.enabled }}
+# Cross-domain service-invocation resiliency for the ORCHESTRATOR sidecar only — cross-domain traffic
+# is orchestrator → orchestrator (a domain never invokes another domain's execution host or workers).
+#
+# Rendered unconditionally. It needs no list of remote domains: the policies below use Dapr's
+# RESERVED default names (Default<Target><Kind>Policy), which apply to every service-invocation
+# target that has no more specific policy of its own. The orchestrator's only other Dapr target,
+# its execution host, keeps the explicit policies in resiliency-orchestration.yaml — a named target
+# always wins over a default — so this file effectively governs cross-domain calls only.
+#
+# Resiliency targets are keyed by the app-id WITHOUT its namespace (daprd splits
+# `vnext-credit-app.preprod-vnext-credit` first, then looks the policy up by `vnext-credit-app`), so
+# an optional per-domain entry in global.dapr.crossDomainTargets is written as `vnext-<domain>-app`.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: vnext-cross-domain-resiliency
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+scopes:
+- {{ printf "vnext-%s-app" .Values.global.appDomain | quote }}
+spec:
+  policies:
+    circuitBreakers:
+      # Fast-fail a remote domain that is down instead of stacking per-call timeouts. Mirrors
+      # invocationBreaker in resiliency-orchestration.yaml deliberately: same shape, same reasoning.
+      # Reserved name ⇒ applies to every app target not naming its own breaker.
+      DefaultAppCircuitBreakerPolicy:
+        maxRequests: 1
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+    retries:
+      # An explicit NO-OP retry under the reserved default name. This exists to PIN behaviour:
+      # without it, a cluster-wide default or a future edit could silently reintroduce retries on
+      # mutating cross-domain calls (instances/start, internal/subflow-forward, transitions/{key},
+      # sub/*, busy, child-cancel, complete, longpoll/ack). Those are side-effecting and must be
+      # attempted exactly once by the transport; a duplicate start or subflow-forward is data
+      # corruption, not a slow call.
+      #
+      # Why retry cannot be scoped to the safe half here: a Resiliency target is an APP-ID, a
+      # domain's reads and mutations share one app-id (vnext-{domain}-app), and `retry.matching`
+      # filters by HTTP status code, not by path or method. Read-side retry therefore lives in the
+      # app (Polly, on the Read-profile typed clients only) — see RemoteServiceExtensions and
+      # RemoteServiceProfile in the runtime repo. Same conclusion as resiliency-orchestration.yaml.
+      DefaultAppRetryPolicy:
+        policy: constant
+        duration: 1s
+        maxRetries: 0
+  {{- with .Values.global.dapr.crossDomainTargets }}
+  # Optional explicit per-domain targets (DOMAIN names in values; the app-id is composed here).
+  # Redundant with the defaults above unless a domain needs a different policy later; kept so a
+  # per-domain tweak has a home without changing the defaults.
+  targets:
+    apps:
+      {{- range . }}
+      {{ printf "vnext-%s-app" . }}:
+        circuitBreaker: DefaultAppCircuitBreakerPolicy
+        retry: DefaultAppRetryPolicy
+      {{- end }}
+  {{- end }}
+{{- end }}
