@@ -508,10 +508,28 @@ Usage: {{ include "vnext.daprRedisConnectionMetadata" . | trim | nindent 2 }}
 */}}
 {{- define "vnext.daprRedisConnectionMetadata" -}}
 {{- $r := .Values.global.dapr.redis | default dict -}}
+{{/* values key -> the metadata name Dapr actually reads. Most match, but the two
+     retry settings do NOT: components-contrib tags them redisMaxRetries and
+     redisMaxRetryInterval (common/component/redis/settings.go). Emitting them as
+     `maxRetries` / `maxRetryBackoff` meant the first was silently ignored and the
+     second failed component init outright:
+       "can't parse maxRetryBackoff field: strconv.ParseInt: parsing \"2s\""
+     -- which takes down state/lock/pubsub for that app. The values keys keep the
+     readable names; only the emitted metadata name is corrected here. */}}
+{{- $names := dict
+      "poolSize"        "poolSize"
+      "minIdleConns"    "minIdleConns"
+      "idleTimeout"     "idleTimeout"
+      "dialTimeout"     "dialTimeout"
+      "readTimeout"     "readTimeout"
+      "writeTimeout"    "writeTimeout"
+      "maxRetries"      "redisMaxRetries"
+      "maxRetryBackoff" "redisMaxRetryInterval"
+-}}
 {{- range $k := list "poolSize" "minIdleConns" "idleTimeout" "dialTimeout" "readTimeout" "writeTimeout" "maxRetries" "maxRetryBackoff" }}
 {{- $v := get $r $k -}}
 {{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
-- name: {{ $k }}
+- name: {{ index $names $k }}
   value: {{ $v | quote }}
 {{- end }}
 {{- end }}

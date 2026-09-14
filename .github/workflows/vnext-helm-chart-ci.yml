@@ -240,6 +240,13 @@ jobs:
           txt = open('/tmp/scoped.yaml').read()
           if 'Redis__' in txt:
               bad.append('Redis__ is dead config (runtime dropped AddRedis) and must not be emitted')
+          # components-contrib tags these redisMaxRetries / redisMaxRetryInterval. Emitting
+          # the go-redis names instead makes Dapr fail component init at runtime:
+          #   "can't parse maxRetryBackoff field: strconv.ParseInt: parsing \"2s\""
+          for wrong, right in (('name: maxRetryBackoff', 'redisMaxRetryInterval'),
+                               ('name: maxRetries', 'redisMaxRetries')):
+              if wrong in txt:
+                  bad.append(f'{wrong[6:]} is not a Dapr metadata name -- emit {right} instead')
           # DAPR_PUBSUB_BROADCAST_STORE_NAME is NOT dead -- it names the pubsub-broadcast
           # component, which is kept on the orchestrator for a planned invalidation path.
           # It must appear on the orchestrator and nowhere else: a host that carries the
