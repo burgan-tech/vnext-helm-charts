@@ -177,6 +177,14 @@ redis:
     tcpBacklog: 511
     timeout: 0
     tcpKeepalive: 60
+    # -> maxclients. Hard ceiling on concurrent client connections; "" keeps Redis's
+    # own default of 10000. Raise it for a domain whose POD count is high, not whose
+    # traffic is high: every Dapr sidecar opens one connection pool per Redis
+    # component (state + pubsub + pubsub-broadcast + configuration + lock), so the
+    # budget is (pods) x (components) x global.dapr.redis.poolSize, plus headroom for
+    # reconnect storms during a Sentinel failover. Exceeding it makes Redis refuse new
+    # connections, which surfaces in the apps as connection-pool errors.
+    maxClients: ""
 
   # -> io-threads. Redis executes commands on ONE thread; these threads only do
   # socket reads, writes and protocol parsing. They help a node bottlenecked on

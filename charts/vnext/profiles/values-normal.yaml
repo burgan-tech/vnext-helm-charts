@@ -1,0 +1,229 @@
+# =============================================================================
+# vNext sizing profile: NORMAL  --  production baseline
+# =============================================================================
+# Apply with:  helm upgrade --install <rel> oci://ghcr.io/burgan-tech/vnext/vnext \
+#                -f profiles/values-normal.yaml -f <your-domain-values>.yaml
+#
+# WHEN TO USE
+# The reference production shape: orchestration 10 / execution 5 / inbox 3 /
+# outbox 3 as the HPA FLOOR. Use for a domain with steady production traffic.
+#
+# The chart's own defaults are NONPROD-sized (1 replica, 1 Redis node, no HPA), so
+# every production install MUST pass one of low / normal / high.
+#
+# Measured baseline behind these numbers: bmprod/intprod-vnext-contract, 2026-09-09.
+# See docs/SIZING_PROFILES.md for the full table and the reasoning.
+# -----------------------------------------------------------------------------
+
+global:
+  # Deliberately EMPTY. One value cannot serve a ~530Mi orchestrator and a ~115Mi
+  # outbox worker: it over-provisions the workers ~4x while leaving the orchestrator
+  # requesting less than its measured RSS. Size per component instead (below).
+  resources:
+    default: {}
+
+  dapr:
+    # Redis client pool. The budget is a PER-HOST SUM, because each sidecar loads only
+    # the components it is scoped to: orchestrator 4 (state, lock, pubsub,
+    # pubsub-broadcast), execution 2 (state, pubsub), each worker 1 (pubsub), and
+    # db-migrator 1 (lock -- a Job, transient, but it does hold a pool).
+    #   budget = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+    # Keep it under redis-sentinel.redis.network.maxClients with room for the reconnect
+    # burst after a Sentinel failover (roughly double the steady figure).
+    #   floor    10/5/3/3 pods -> 1120 connections
+    #   ceiling  20/15/9/9 pods -> 2560 connections   (maxClients 10000)
+    redis:
+      poolSize: 20
+      minIdleConns: 2
+      idleTimeout: "5m"
+      dialTimeout: "5s"
+      readTimeout: "3s"
+      writeTimeout: "3s"
+      maxRetries: 3
+      maxRetryBackoff: "2s"
+      pubsub:
+        concurrency: 10
+        processingTimeout: "60s"
+        redeliverInterval: "30s"
+        queueDepth: 100
+        # Caps stream length. maxmemory-policy is noeviction, so a Redis at maxmemory
+        # REJECTS writes rather than evicting -- an unbounded stream behind a stalled
+        # consumer would take the whole domain down with it.
+        maxLenApprox: 10000
+
+orchestrator:
+  # HPA floor = the profile's replica count; `replicas` is omitted from the Deployment
+  # whenever autoscaling is enabled, so Helm never fights the HPA.
+  autoscaling:
+    enabled: true
+    minReplicas: 10
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 300m
+      memory: 768Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  podAnnotations:
+    dapr.io/config: appconfig
+    # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 10 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
+    dapr.io/sidecar-cpu-request: 100m
+    dapr.io/sidecar-cpu-limit: 500m
+    dapr.io/sidecar-memory-request: 200Mi
+    dapr.io/sidecar-memory-limit: 512Mi
+    # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
+    # global.terminationGracePeriodSeconds (60).
+    dapr.io/graceful-shutdown-seconds: "20"
+    dapr.io/block-shutdown-duration: 30s
+
+execution:
+  # HPA floor = the profile's replica count; `replicas` is omitted from the Deployment
+  # whenever autoscaling is enabled, so Helm never fights the HPA.
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 15
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 200m
+      memory: 320Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  podAnnotations:
+    dapr.io/config: appconfig
+    # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 10 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
+    dapr.io/sidecar-cpu-request: 100m
+    dapr.io/sidecar-cpu-limit: 500m
+    dapr.io/sidecar-memory-request: 200Mi
+    dapr.io/sidecar-memory-limit: 512Mi
+    # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
+    # global.terminationGracePeriodSeconds (60).
+    dapr.io/graceful-shutdown-seconds: "20"
+    dapr.io/block-shutdown-duration: 30s
+
+worker-inbox:
+  # HPA floor = the profile's replica count; `replicas` is omitted from the Deployment
+  # whenever autoscaling is enabled, so Helm never fights the HPA.
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 9
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 150m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+  podAnnotations:
+    dapr.io/config: appconfig
+    # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 10 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
+    dapr.io/sidecar-cpu-request: 100m
+    dapr.io/sidecar-cpu-limit: 500m
+    dapr.io/sidecar-memory-request: 200Mi
+    dapr.io/sidecar-memory-limit: 512Mi
+    # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
+    # global.terminationGracePeriodSeconds (60).
+    dapr.io/graceful-shutdown-seconds: "20"
+    dapr.io/block-shutdown-duration: 30s
+
+worker-outbox:
+  # HPA floor = the profile's replica count; `replicas` is omitted from the Deployment
+  # whenever autoscaling is enabled, so Helm never fights the HPA.
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 9
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 75
+  resources:
+    requests:
+      cpu: 150m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+  podAnnotations:
+    dapr.io/config: appconfig
+    # Sidecar sizing is an environment concern by chart design (see _helpers.tpl).
+    # Measured daprd AT REST is only 0.6-2.0m CPU / 48-81Mi RSS, but that idle figure is
+    # NOT what sizes this. The chart emits dapr.io/max-body-size: 64Mi, so ONE in-flight
+    # body can add ~64Mi to the sidecar's working set, and this profile allows
+    # 10 concurrent pub/sub handler invocations. So: the memory REQUEST is held above
+    # baseline + one 64Mi body (or the sidecar becomes the first eviction candidate on a
+    # pod that is on every request path), and the LIMIT covers several concurrent bodies.
+    # daprd holds poolSize connections per Redis component it is SCOPED to -- 4 for the
+    # orchestrator, 2 for execution, 1 for each worker (global.dapr.redis.scopes).
+    dapr.io/sidecar-cpu-request: 100m
+    dapr.io/sidecar-cpu-limit: 500m
+    dapr.io/sidecar-memory-request: 200Mi
+    dapr.io/sidecar-memory-limit: 512Mi
+    # INTEGER seconds -- "20s" fails to parse. block + graceful must fit
+    # global.terminationGracePeriodSeconds (60).
+    dapr.io/graceful-shutdown-seconds: "20"
+    dapr.io/block-shutdown-duration: 30s
+
+redis-sentinel:
+  # 3 nodes / quorum 2 is the minimum that can actually elect a new master. Redis is
+  # idle at every observed load (12-17m CPU, 58-84Mi RSS), so do NOT scale nodes to
+  # fix connection errors -- scale poolSize and maxClients.
+  replicaCount: 3
+  sentinel:
+    quorum: 2
+  redis:
+    network:
+      maxClients: 10000
+    # io-threads intentionally left unset. They only help a node bottlenecked on many
+    # connections or large values, and this Redis is idle. "auto" would also be a
+    # no-op here: it derives max(1, min(cores-2, 8)) from the CPU limit, so anything
+    # under a 3-core limit collapses to 1 and emits nothing.
+    ioThreads: ""
+  resources:
+    # limits.memory is ALSO the maxmemory knob: maxmemory = 0.78 x this unless
+    # redis.maxMemory is set. Here that is ~1.6Gi against an observed ~84Mi dataset.
+    redis:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    sentinel:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi

@@ -139,7 +139,7 @@ Usage: {{ include "vnext.resources" (dict "component" .Values.orchestrator "glob
 
 {{/*
 Generate Dapr pod annotations
-Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol) }}
+Usage: {{ include "vnext.daprAnnotations" (dict "dapr" .Values.orchestrator.dapr "enabled" .Values.global.dapr.enabled "component" "orchestrator" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "logAsJson" .Values.global.dapr.logAsJson) }}
 */}}
 {{- define "vnext.daprAnnotations" -}}
 {{- if and .dapr.enabled .enabled -}}
@@ -162,6 +162,16 @@ dapr.io/app-port: {{ .dapr.appPort | quote }}
      that don't pass "globalProtocol" still land on "http" via the final default. */}}
 dapr.io/app-protocol: {{ .dapr.protocol | default .globalProtocol | default "http" | quote }}
 {{- end }}
+{{/* Sidecar log format. daprd defaults to plain text; JSON is what makes the sidecar's
+     own logs parseable in Elastic alongside the app's structured logs (the app already
+     ships OTLP/console via global.telemetry.logging). Distinct from dapr.global.logAsJson
+     in the vendored subchart, which is the CONTROL PLANE's setting and does not reach
+     these sidecars.
+     Guarded with kindIs "invalid" rather than `default`/`coalesce`: this is a BOOLEAN, and
+     both of those treat false as empty, which would silently ignore an explicit false. */}}
+{{- if not (kindIs "invalid" .logAsJson) }}
+dapr.io/log-as-json: {{ .logAsJson | quote }}
+{{- end }}
 {{/* Preferred body-size annotation (Dapr >= 1.13, resource-quantity string e.g. "64Mi").
      The legacy MB-integer annotation below is deprecated but still emitted when a user
      sets httpMaxRequestSize explicitly — e.g. an environment pinned to an old sidecar. */}}
@@ -183,19 +193,77 @@ dapr.io/http-max-request-size: {{ .httpMaxRequestSize | quote }}
 {{- end }}
 
 {{/*
-Generate common environment variables for .NET services
+Environment variables every .NET service needs, regardless of which Dapr building
+blocks it uses.
+
+The DAPR_*_STORE_NAME keys used to live here and were emitted identically into all
+five configmaps. They are now per-host in vnext.daprStoreEnvVars, because a store
+name set on a host whose sidecar does NOT load that component resolves to nothing
+and fails only at first use. DAPR_SECRET_STORE_NAME stays here: every host reads it
+when Vault is on, and the secretstore component is deliberately unscoped.
+
+DAPR_PUBSUB_BROADCAST_STORE_NAME moved there too, narrowed from all five hosts to
+the orchestrator alone -- the only host the pubsub-broadcast component is scoped to.
 Usage: {{ include "vnext.commonEnvVars" . }}
 */}}
 {{- define "vnext.commonEnvVars" -}}
 ASPNETCORE_URLS: "http://+:5000"
+{{/* DAPR_PLACEMENT_HOST is dead config: no runtime C# reads it, and its default
+     (dapr-placement:50005) names no Service this chart deploys -- the vendored
+     subchart's Service is dapr-placement-server. Left in place deliberately: turning
+     actors/placement off is tracked as separate work, and in production the Dapr
+     control plane lives in its own namespace where the injector supplies the
+     placement address itself. See docs/SIZING_PROFILES.md. */}}
 DAPR_PLACEMENT_HOST: {{ .Values.global.dapr.placementHost | quote }}
 DAPR_HTTP_PORT: {{ .Values.global.dapr.httpPort | quote }}
 DAPR_GRPC_PORT: {{ .Values.global.dapr.grpcPort | quote }}
 DAPR_SECRET_STORE_NAME: {{ printf "%s-secret" (include "vnext.fullname" .) | quote }}
-DAPR_STATE_STORE_NAME: {{ printf "%s-state" (include "vnext.fullname" .) | quote }}
-DAPR_PUBSUB_STORE_NAME: {{ printf "%s-pubsub" (include "vnext.fullname" .) | quote }}
-DAPR_PUBSUB_BROADCAST_STORE_NAME: {{ printf "%s-pubsub-broadcast" (include "vnext.fullname" .) | quote }}
-DAPR_LOCK_STORE_NAME: {{ printf "%s-redis-lock" (include "vnext.fullname" .) | quote }}
+{{- end }}
+
+{{/*
+Per-host Dapr store names. Emits ONLY the stores the given host actually reads,
+mirroring the scope policy in vnext.daprRedisScopes -- the two are deliberate mirror
+images, and the failure mode this prevents is a host holding a store name its sidecar
+cannot serve.
+
+Derived from vnext/docs/runtime/dapr-component-footprint.md, which maps building
+blocks to the consumption points in code (not DI registrations, which are lazy and
+prove nothing):
+
+  DAPR_STATE_STORE_NAME   orchestrator (platform cache), execution (StateStoreTask /
+                          CacheAsideTask fall back to it when a task omits storeName)
+  DAPR_LOCK_STORE_NAME    orchestrator (InstanceStatusLock, TransitionLockScopeFactory,
+                          DaprResourceLockService), db-migrator (SchemaMigrationRunner)
+  DAPR_PUBSUB_STORE_NAME  orchestrator (OutboxWakeupEvent publish), execution
+                          (domain-authored DaprPubSubTask), both workers (subscribe)
+  DAPR_PUBSUB_BROADCAST_STORE_NAME
+                          orchestrator ONLY -- and deliberately kept even though no
+                          runtime C# reads it yet (it survives in the runtime repo's
+                          launchSettings.json / .vscode/tasks.json). The
+                          pubsub-broadcast component is held on the orchestrator for
+                          a planned pod-to-pod invalidation path; the component and
+                          the name that resolves it have to be kept or dropped
+                          TOGETHER, or the orchestrator ends up with a component it
+                          cannot address. It was previously emitted for all five
+                          hosts, four of which never load the component.
+
+Usage: {{ include "vnext.daprStoreEnvVars" (dict "root" . "component" "worker-inbox") }}
+*/}}
+{{- define "vnext.daprStoreEnvVars" -}}
+{{- $full := include "vnext.fullname" .root -}}
+{{- $c := .component -}}
+{{- if has $c (list "orchestrator" "execution") }}
+DAPR_STATE_STORE_NAME: {{ printf "%s-state" $full | quote }}
+{{- end }}
+{{- if has $c (list "orchestrator" "db-migrator") }}
+DAPR_LOCK_STORE_NAME: {{ printf "%s-redis-lock" $full | quote }}
+{{- end }}
+{{- if has $c (list "orchestrator" "execution" "worker-inbox" "worker-outbox") }}
+DAPR_PUBSUB_STORE_NAME: {{ printf "%s-pubsub" $full | quote }}
+{{- end }}
+{{- if has $c (list "orchestrator") }}
+DAPR_PUBSUB_BROADCAST_STORE_NAME: {{ printf "%s-pubsub-broadcast" $full | quote }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -423,6 +491,118 @@ Usage: {{ include "vnext.redisEndpoint" . }}
 {{- end -}}
 
 {{/*
+Dapr Redis client connection metadata, shared by every Redis-backed component
+(state, pubsub, pubsub-broadcast, configuration, lock).
+
+WHY THIS EXISTS: with poolSize unset, the go-redis client Dapr embeds derives its
+pool from GOMAXPROCS -- i.e. the NODE's core count, not the sidecar's CPU limit.
+On large workers that is hundreds of connections per component. It used to be worse:
+the components declared no scopes, so every sidecar in the namespace loaded all five.
+They are now scoped per host (see vnext.daprRedisScopes) and the configuration
+component is gone, so the budget is a per-host sum rather than pods x 5.
+
+A key set to "" is OMITTED rather than emitted as an empty value, which is the only
+way an environment can hand a setting back to the client's own default: Helm's
+coalesce restores a chart default over `null`, so `null` cannot clear these.
+Usage: {{ include "vnext.daprRedisConnectionMetadata" . | trim | nindent 2 }}
+*/}}
+{{- define "vnext.daprRedisConnectionMetadata" -}}
+{{- $r := .Values.global.dapr.redis | default dict -}}
+{{- range $k := list "poolSize" "minIdleConns" "idleTimeout" "dialTimeout" "readTimeout" "writeTimeout" "maxRetries" "maxRetryBackoff" }}
+{{- $v := get $r $k -}}
+{{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Dapr Redis pub/sub-only metadata. Bounds in-flight handler invocations and caps
+stream length, which is what keeps a backed-up consumer from growing the stream
+past maxmemory (the policy is noeviction, so a full Redis REJECTS writes).
+Same ""-omits-the-key contract as the connection metadata above.
+Usage: {{ include "vnext.daprRedisPubsubMetadata" . | trim | nindent 2 }}
+*/}}
+{{- define "vnext.daprRedisPubsubMetadata" -}}
+{{- $p := (.Values.global.dapr.redis | default dict).pubsub | default dict -}}
+{{- range $k := list "concurrency" "processingTimeout" "redeliverInterval" "queueDepth" "maxLenApprox" }}
+{{- $v := get $p $k -}}
+{{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+scopes block for a Redis component -- CHART POLICY, not an operator guess.
+
+An unscoped Dapr component is loaded by EVERY sidecar in the namespace, and each one
+costs a Redis client and a connection pool whether the app calls it or not. The
+defaults below come from vnext/docs/runtime/dapr-component-footprint.md, which maps
+each building block to the consumption points in code:
+
+  state             orchestrator (platform cache: CacheSet, ComponentCacheStore,
+                    StateFunctionCache, DistributedCacheIdempotencyStore ...)
+                    execution   (DaprStateStoreClient; a StateStoreTask or
+                                CacheAsideTask with no storeName falls back to it)
+  lock              orchestrator (InstanceStatusLock, TransitionLockScopeFactory,
+                                DiscoveryCacheRefresher, DaprResourceLockService)
+                    db-migrator (SchemaMigrationOrchestrator.MigrateSchemaWithLockAsync)
+  pubsub            orchestrator (publishes OutboxWakeupEvent), worker-inbox and
+                    worker-outbox (subscribe), execution (domain-authored
+                    DaprPubSubTask -- see the note below)
+  pubsubBroadcast   orchestrator only; held for a planned pod-to-pod invalidation
+                    path, read by no C# code today
+
+execution is included in `pubsub` on purpose even though the audit marks it
+"domain-authored only": domains are authored independently, and an execution sidecar
+outside the scope fails when a DaprPubSubTask first runs -- at RUNTIME, not at render.
+One pool per execution pod is cheap insurance. Remove it via the override below once
+you have confirmed no domain publishes from a task.
+
+db-migrator is easy to forget: it is a Job, but it DOES get a sidecar
+(db-migrator-job.yaml calls vnext.daprAnnotations), so leaving it out of `lock` fails
+the migration. mcp-server has no sidecar at all and is never a scope member.
+
+The secretstore component is deliberately NOT scoped: every Redis component names it
+as auth.secretStore, and it is create-once (lookup guard + resource-policy: keep), so
+a scope added later would not even be applied to an existing release.
+
+Override per component with global.dapr.redis.scopes.<key>, which REPLACES the default
+list (it does not merge). An explicit empty list restores the unscoped
+load-everywhere behaviour.
+Usage: {{ include "vnext.daprRedisScopes" (dict "root" . "key" "state") }}
+*/}}
+{{- define "vnext.daprRedisScopes" -}}
+{{- $d := .root.Values.global.appDomain -}}
+{{- $defaults := dict
+      "state"           (list "orchestrator" "execution")
+      "lock"            (list "orchestrator" "db-migrator")
+      "pubsub"          (list "orchestrator" "execution" "worker-inbox" "worker-outbox")
+      "pubsubBroadcast" (list "orchestrator")
+-}}
+{{- $override := index ((.root.Values.global.dapr.redis | default dict).scopes | default dict) .key -}}
+{{- $scopes := list -}}
+{{- if not (kindIs "invalid" $override) -}}
+{{/* Operator-supplied app-ids are used verbatim -- they may name sidecars this chart
+     does not create (e.g. a cross-domain caller). */}}
+{{- $scopes = $override -}}
+{{- else -}}
+{{- range $comp := (index $defaults .key | default list) -}}
+{{- $scopes = append $scopes (include "vnext.daprAppId" (dict "component" $comp "appDomain" $d)) -}}
+{{- end -}}
+{{- end -}}
+{{- with $scopes }}
+scopes:
+{{- range . }}
+- {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Get Vault address with fallback
 Usage: {{ include "vnext.vaultAddress" . }}
 */}}
@@ -447,12 +627,27 @@ Usage: {{ include "vnext.otelEndpoint" . }}
 {{- end -}}
 
 {{/*
-Generate component-specific app ID for Dapr
-Usage: {{ include "vnext.daprAppId" (dict "component" "orchestrator" "appDomain" .Values.global.appDomain) }}
+Component-specific Dapr app ID. MUST stay in lockstep with vnext.daprAnnotations,
+which is what actually injects dapr.io/app-id -- a divergence here silently produces
+scopes and env values that name a sidecar that does not exist.
+
+This helper previously collapsed worker-inbox, worker-outbox and db-migrator to
+`vnext-<d>-app`, which is wrong for all three; it was dead code at the time, so
+nothing broke, but it is now load-bearing for scope generation.
+
+mcp-server is deliberately absent: templates/mcp-server/deployment.yaml never calls
+vnext.daprAnnotations, so it has no sidecar and can never be a legitimate scope member.
+Usage: {{ include "vnext.daprAppId" (dict "component" "worker-inbox" "appDomain" .Values.global.appDomain) }}
 */}}
 {{- define "vnext.daprAppId" -}}
 {{- if eq .component "execution" -}}
 {{- printf "vnext-%s-execution-app" .appDomain -}}
+{{- else if eq .component "worker-inbox" -}}
+{{- printf "vnext-%s-worker-inbox-app" .appDomain -}}
+{{- else if eq .component "worker-outbox" -}}
+{{- printf "vnext-%s-worker-outbox-app" .appDomain -}}
+{{- else if eq .component "db-migrator" -}}
+{{- printf "vnext-%s-db-migrator-app" .appDomain -}}
 {{- else -}}
 {{- printf "vnext-%s-app" .appDomain -}}
 {{- end -}}
