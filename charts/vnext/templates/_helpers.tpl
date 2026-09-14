@@ -507,7 +507,11 @@ coalesce restores a chart default over `null`, so `null` cannot clear these.
 Usage: {{ include "vnext.daprRedisConnectionMetadata" . | trim | nindent 2 }}
 */}}
 {{- define "vnext.daprRedisConnectionMetadata" -}}
-{{- $r := .Values.global.dapr.redis | default dict -}}
+{{- $r := .root.Values.global.dapr.redis | default dict -}}
+{{/* Per-kind overrides layered on the shared defaults. Redis backs three different
+     building blocks here and they do NOT want the same client settings -- see the
+     readTimeout and poolSize notes in values.yaml. Pass kind: state | lock | pubsub. */}}
+{{- $over := (get $r .kind) | default dict -}}
 {{/* values key -> the metadata name Dapr actually reads. Most match, but the two
      retry settings do NOT: components-contrib tags them redisMaxRetries and
      redisMaxRetryInterval (common/component/redis/settings.go). Emitting them as
@@ -528,6 +532,7 @@ Usage: {{ include "vnext.daprRedisConnectionMetadata" . | trim | nindent 2 }}
 -}}
 {{- range $k := list "poolSize" "minIdleConns" "idleTimeout" "dialTimeout" "readTimeout" "writeTimeout" "maxRetries" "maxRetryBackoff" }}
 {{- $v := get $r $k -}}
+{{- if hasKey $over $k }}{{- $v = get $over $k -}}{{- end }}
 {{- if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
 - name: {{ index $names $k }}
   value: {{ $v | quote }}

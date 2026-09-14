@@ -203,43 +203,79 @@ global:
     # its pool from GOMAXPROCS — the NODE's core count, not the sidecar's CPU limit.
     # On 64-core workers that is hundreds of connections per component.
     #
-    # The budget is a PER-HOST SUM, not pods x components, because each sidecar now
-    # loads only the components it actually consumes (see scopes below):
+    # Values here are the SHARED defaults. Redis backs three different building
+    # blocks and they do not want the same client settings, so each kind can
+    # override any of them under `state:` / `lock:` / `pubsub:` below.
     #
-    #   budget = SUM over hosts ( pods_host x redisComponents_host x poolSize )
+    # The budget is a PER-HOST SUM, because each sidecar loads only the components
+    # it is scoped to:
     #
-    #   orchestrator  4   state, lock, pubsub, pubsub-broadcast
-    #   execution     2   state, pubsub
-    #   worker-inbox  1   pubsub
-    #   worker-outbox 1   pubsub
-    #   db-migrator   1   lock   (a Job -- transient, but it does hold a pool)
+    #   orchestrator  state + lock + pubsub + pubsub-broadcast
+    #   execution     state + pubsub
+    #   worker-inbox  pubsub          worker-outbox  pubsub
+    #   db-migrator   lock            (a Job -- transient, but it holds a pool)
     #
     # Keep the total under redis-sentinel.redis.network.maxClients with room for the
-    # reconnect burst that follows a Sentinel failover (roughly double the steady
-    # figure). Worked numbers per profile are in docs/SIZING_PROFILES.md.
-    # These defaults are NONPROD-sized; see profiles/values-{low,normal,high}.yaml.
+    # reconnect burst after a Sentinel failover. Worked numbers per profile are in
+    # docs/SIZING_PROFILES.md.
+    #
     # Setting a key to "" omits it, handing that setting back to the client's own
     # default -- which for poolSize means the unbounded pre-1.0.110 behaviour, so
     # don't, unless you are debugging. Note `null` will NOT clear these: Helm's
     # coalesce restores the chart default over a null, so use "" instead.
     redis:
-      poolSize: 5
+      poolSize: 10
       minIdleConns: 1
       idleTimeout: "5m"
       dialTimeout: "5s"
+      # Socket read deadline for an ordinary command (state GET/SET, lock acquire).
+      # Short is correct here: it is what stops a hung call from pinning a connection.
       readTimeout: "3s"
       writeTimeout: "3s"
       maxRetries: 3
       maxRetryBackoff: "2s"
-      # pub/sub only. concurrency bounds in-flight handler invocations;
-      # maxLenApprox caps stream length, which matters because maxmemory-policy is
-      # noeviction — a full Redis REJECTS writes rather than evicting old entries.
+
+      # ---------------------------------------------------------------------
+      # Per-kind overrides. Anything omitted inherits the shared value above.
+      # ---------------------------------------------------------------------
+      state: {}
+      lock: {}
+
       pubsub:
+        # readTimeout means something COMPLETELY DIFFERENT for pubsub.redis: Dapr
+        # passes it as the BLOCK duration of XREADGROUP
+        # (components-contrib/pubsub/redis/redis.go), so it is how long an idle
+        # consumer waits, not a failure threshold. At the shared 3s, every consumer
+        # on every topic times out every 3 seconds, logs
+        #   "redis streams: error reading from stream <topic>: read tcp ...: i/o timeout"
+        # at ERROR level, and -- measured in preprod, same topic, new source port
+        # every 3.000s -- DISCARDS THE TCP CONNECTION AND DIALS A NEW ONE. With 10
+        # subscribed topics that is ~3 new Redis connections per second per pod.
+        #
+        # 30s cuts both the log volume and that churn by 10x. Longer costs nothing:
+        # XREADGROUP still returns the instant a message arrives, so delivery latency
+        # is unchanged -- the block only governs the idle wait.
+        #
+        # It does not eliminate the timeouts: Dapr uses this one value for both the
+        # BLOCK and the socket deadline, so they always race. Fixing that properly
+        # needs a change in components-contrib.
+        readTimeout: "30s"
+
+        # Each subscribed topic runs its OWN blocking XREADGROUP holding a connection
+        # for the whole block. Measured: 10 topics on a discovery worker. So the pool
+        # must cover topics + concurrency + acks/reclaim, or the blocking consumers
+        # alone exhaust it and every XACK waits on PoolTimeout. 10 + 5 + headroom.
+        poolSize: 20
+
+        # concurrency bounds in-flight handler invocations; maxLenApprox caps stream
+        # length, which matters because maxmemory-policy is noeviction — a full Redis
+        # REJECTS writes rather than evicting old entries.
         concurrency: 5
         processingTimeout: "60s"
         redeliverInterval: "30s"
         queueDepth: 100
         maxLenApprox: 10000
+
       # Which app-ids load each component. The chart ships an evidence-backed
       # DEFAULT -- these are no longer opt-in, and leaving this empty does NOT mean
       # "load everywhere" any more:
@@ -1427,9 +1463,12 @@ redis-sentinel:
     # Connection ceiling. Scales with POD count, not traffic: each Dapr sidecar opens one
     # pool per Redis component (state + pubsub + pubsub-broadcast + configuration + lock).
     # Budget = pods x components x global.dapr.redis.poolSize + failover headroom.
-    # Nonprod (4 app pods, poolSize 5) needs ~100; 1000 leaves a wide margin.
+    # Per-kind pools: orchestrator holds state+lock+pubsub+broadcast, execution
+    # state+pubsub, each worker one pubsub. At the chart's 2/2/2/2 that is ~270
+    # steady; the domain values files run 5/5/2/2 (~540), and a Sentinel failover
+    # roughly doubles it briefly. 2000 leaves room for both.
     network:
-      maxClients: 1000
+      maxClients: 2000
 
     # DISABLED ON PURPOSE -> emptyDir, no PVC. This Redis has always been diskless in
     # practice: redis.extraConfig above sets `appendonly no` and `save ""`, and

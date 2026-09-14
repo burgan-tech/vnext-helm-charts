@@ -1089,7 +1089,7 @@ kubectl delete namespace vnext
 | `global.database.clickhouse.enabled` | ClickHouse integration | `false` |
 | `global.externalRedis.endpoint` | External Redis endpoint | `""` |
 | `global.resources.default` | One-size override for every component. Empty by default so the per-component `resourcesFallback` applies; see [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
-| `global.dapr.redis.poolSize` | Redis client pool per Dapr component the sidecar is scoped to (orchestrator 4, execution 2, worker 1) | `5` |
+| `global.dapr.redis.poolSize` | Shared Redis client pool per component; override per kind under `state`/`lock`/`pubsub` | `10` |
 | `global.dapr.redis.pubsub.concurrency` | Bound on in-flight pub/sub handler invocations | `5` |
 | `redis-sentinel.redis.network.maxClients` | Redis `maxclients` ceiling (`""` keeps Redis's own 10000) | `1000` |
 

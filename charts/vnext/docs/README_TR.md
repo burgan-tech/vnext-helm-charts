@@ -1089,7 +1089,7 @@ kubectl delete namespace vnext
 | `global.database.clickhouse.enabled` | ClickHouse entegrasyonu | `false` |
 | `global.externalRedis.endpoint` | Harici Redis endpoint'i | `""` |
 | `global.resources.default` | Tüm bileşenler için tek boyut. Varsayılan boştur, bileşen bazlı `resourcesFallback` uygulanır; bkz. [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
-| `global.dapr.redis.poolSize` | Sidecar'ın scope'landığı her Dapr bileşeni için Redis client pool'u (orchestrator 4, execution 2, worker 1) | `5` |
+| `global.dapr.redis.poolSize` | Bileşen başına paylaşılan Redis client pool'u; `state`/`lock`/`pubsub` altında kind bazlı override edilebilir | `10` |
 | `global.dapr.redis.pubsub.concurrency` | Eşzamanlı pub/sub handler çağrısı üst sınırı | `5` |
 | `redis-sentinel.redis.network.maxClients` | Redis `maxclients` üst sınırı (`""` Redis'in kendi 10000 değerini korur) | `1000` |
 

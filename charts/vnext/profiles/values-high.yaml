@@ -42,14 +42,21 @@ global:
       writeTimeout: "3s"
       maxRetries: 3
       maxRetryBackoff: "2s"
+      # Per-kind overrides. readTimeout is the XREADGROUP BLOCK duration for
+      # pubsub, not a failure threshold -- at the shared value every idle
+      # consumer times out, logs an error and re-dials its TCP connection.
+      # Each subscribed topic also holds its own blocking connection
+      # (10 measured on a discovery worker), so the pubsub pool must cover
+      # topics + concurrency + acks/reclaim.
+      state: {}
+      lock: {}
       pubsub:
+        readTimeout: "30s"
+        poolSize: 40
         concurrency: 20
         processingTimeout: "60s"
         redeliverInterval: "30s"
         queueDepth: 100
-        # Caps stream length. maxmemory-policy is noeviction, so a Redis at maxmemory
-        # REJECTS writes rather than evicting -- an unbounded stream behind a stalled
-        # consumer would take the whole domain down with it.
         maxLenApprox: 10000
 
 orchestrator:
