@@ -29,7 +29,7 @@ global:
     # (state, pubsub), each worker 1 (pubsub), db-migrator 1 (lock).
     #   2/2/2/2 pods -> 80 connections   (maxClients 1000)
     redis:
-      poolSize: 5
+      poolSize: 10
       minIdleConns: 1
       idleTimeout: "5m"
       dialTimeout: "5s"
@@ -37,7 +37,17 @@ global:
       writeTimeout: "3s"
       maxRetries: 3
       maxRetryBackoff: "2s"
+      # Per-kind overrides. readTimeout is the XREADGROUP BLOCK duration for
+      # pubsub, not a failure threshold -- at the shared value every idle
+      # consumer times out, logs an error and re-dials its TCP connection.
+      # Each subscribed topic also holds its own blocking connection
+      # (10 measured on a discovery worker), so the pubsub pool must cover
+      # topics + concurrency + acks/reclaim.
+      state: {}
+      lock: {}
       pubsub:
+        readTimeout: "30s"
+        poolSize: 20
         concurrency: 5
         processingTimeout: "60s"
         redeliverInterval: "30s"
@@ -101,7 +111,7 @@ redis-sentinel:
     quorum: 2
   redis:
     network:
-      maxClients: 1000
+      maxClients: 2000
   resources:
     redis:
       requests:

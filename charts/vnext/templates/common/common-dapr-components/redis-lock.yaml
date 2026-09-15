@@ -22,7 +22,7 @@ spec:
         name: workflow-secret
     - name: failover
       value: true
-    {{- with include "vnext.daprRedisConnectionMetadata" . | trim }}
+    {{- with include "vnext.daprRedisConnectionMetadata" (dict "root" . "kind" "lock") | trim }}
     {{- . | nindent 4 }}
     {{- end }}
 auth:

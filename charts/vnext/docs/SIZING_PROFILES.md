@@ -91,15 +91,54 @@ components it is scoped to — see [Scoping](#scoping-what-actually-cut-the-budg
 It must stay under `redis-sentinel.redis.network.maxClients`, with headroom for the
 reconnect burst that follows a Sentinel failover (roughly double the steady figure).
 
-| Profile | `poolSize` | at floor | at HPA ceiling | `maxClients` |
-|---|---|---|---|---|
-| nonprod | 5 | 80 | n/a (HPA off) | 1000 |
-| low | 10 | 140 | 440 | 5000 |
-| normal | 20 | 1120 | 2560 | 10000 |
-| high | 20 | 2240 | 5120 | 20000 |
+Pool sizes are **per kind**, because Redis backs three building blocks here and they
+do not want the same client settings:
 
-`high` keeps `maxClients: 20000` even though 5120 fits under Redis's 10000 default: a
-Sentinel failover reconnects the whole fleet at once, and 5120 x 2 would cross it.
+| Profile | state / lock | pubsub | at floor | at HPA ceiling | `maxClients` |
+|---|---|---|---|---|---|
+| nonprod | 10 | 20 | 270 | n/a (HPA off) | 2000 |
+| low | 10 | 20 | 230 | 620 | 5000 |
+| normal | 20 | 30 | 1450 | 2900 | 10000 |
+| high | 20 | 40 | 3500 | 7000 | 20000 |
+
+Per pod: orchestrator holds `state + lock + pubsub + pubsub-broadcast`, execution
+`state + pubsub`, each worker one `pubsub`, db-migrator one `lock`.
+
+### Why pubsub needs its own settings
+
+Two Dapr behaviours make the shared values wrong for `pubsub.redis`, both measured in
+preprod on 2026-09-14:
+
+**`readTimeout` is the `XREADGROUP` BLOCK duration, not a failure threshold.** Dapr passes
+it straight through (`components-contrib/pubsub/redis/redis.go`), so it is how long an
+idle consumer waits. At the shared 3s every consumer on every topic timed out every three
+seconds and logged, at ERROR level:
+
+```
+redis streams: error reading from stream preprod.instance.canceled.v1:
+  read tcp <pod>:53814-><redis>:6379: i/o timeout
+```
+
+The same topic on the same pod produced a **new source port every 3.000 seconds**
+(`53814 → 53920 → 54012 → 36948 …`), which means each timeout **discards the TCP
+connection and dials a fresh one**. With 10 subscribed topics that is ~3 new Redis
+connections per second per pod — real load, not just log noise. `30s` cuts both by 10x.
+Longer costs nothing: `XREADGROUP` returns the instant a message arrives, so delivery
+latency is unchanged — the block only governs the idle wait.
+
+It does not *eliminate* the timeouts. Dapr uses this one value for both the BLOCK and the
+socket deadline, so the two always race; fixing that needs a components-contrib change.
+
+**Every subscribed topic holds its own blocking connection.** A discovery worker was
+measured subscribing to 10 topics, each with its own `XREADGROUP` consumer occupying a
+connection for the whole block. So the pubsub pool must cover
+`topics + concurrency + acks/reclaim` — at `poolSize: 10` the blocking consumers alone
+would have taken the entire pool and every `XACK` would have waited on `PoolTimeout`.
+That is the same "connection pool timeout" class of error this work set out to fix.
+
+`maxClients` is sized for roughly double the steady figure, because a Sentinel failover
+reconnects the whole fleet at once. Note that **adding Redis nodes does not add connection
+capacity** — clients connect to the master, so the master absorbs the entire budget.
 
 ### Scoping: what actually cut the budget in half
 
