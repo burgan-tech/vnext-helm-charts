@@ -8,6 +8,7 @@ metadata:
 data:
   # Common environment variables for all .NET services
   {{- include "vnext.commonEnvVars" . | nindent 2 }}
+  {{- include "vnext.daprStoreEnvVars" (dict "root" . "component" "execution") | nindent 2 }}
   
   # Global .NET environment variables
   {{- include "vnext.dotnetEnvVars" .Values.global.dotnetEnv | nindent 2 }}
@@ -23,8 +24,6 @@ data:
   ConnectionStrings__Default: {{ .Values.global.database.connectionString | quote }}
   {{- end }}
   
-  # Redis configuration
-  Redis__Standalone__EndPoints__0: {{ include "vnext.redisEndpoint" . | quote }}
 
   vNextApi__BaseUrl: {{ printf "http://vnext-%s-orchestrator:5000" ( .Values.global.appDomain ) | quote }}
 
