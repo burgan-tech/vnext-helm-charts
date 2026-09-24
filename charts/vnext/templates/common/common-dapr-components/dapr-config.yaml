@@ -1,3 +1,4 @@
+{{- include "vnext.validateNameResolution" . -}}
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
@@ -6,6 +7,36 @@ spec:
   features:
   - enabled: true
     name: HotReload
+{{- with .Values.global.dapr.nameResolution }}
+{{- if .component }}
+  # How a caller sidecar turns an app-id into a sidecar-to-sidecar address. Reaches every
+  # component because they all carry `dapr.io/config: appconfig` in their podAnnotations.
+  #
+  # `kubernetes` is already Dapr's default in Kubernetes mode, so this block is a
+  # no-op by design — it exists to make cross-namespace resolution explicit and to give
+  # the template a single home. See global.dapr.nameResolution in values.yaml for why
+  # `nameformat` cannot serve this topology (it never reads req.Namespace, while Dapr
+  # pins mTLS to the real (namespace, app-id) pair).
+  nameResolution:
+    component: {{ .component | quote }}
+    {{- if or .template .clusterDomain }}
+    configuration:
+      {{- /*
+        `template` is quoted straight from values so its {{.ID}} / {{.Namespace}} /
+        {{.Port}} reach the sidecar LITERALLY — they are Dapr's Go template, not Helm's.
+        Never inline the template text in this file: Helm would evaluate it here and
+        render an empty address, which fails silently (the sidecar resolves to
+        "-dapr..:" and every invocation dies with ERR_DIRECT_INVOKE).
+      */ -}}
+      {{- with .template }}
+      template: {{ . | quote }}
+      {{- end }}
+      {{- with .clusterDomain }}
+      clusterDomain: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
   metric:
     enabled: false
   metrics:
