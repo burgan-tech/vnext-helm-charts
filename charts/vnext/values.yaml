@@ -226,6 +226,9 @@ global:
       # Resolver component. Empty = omit the block entirely (Dapr falls back to its
       # per-mode default, which is `kubernetes` in Kubernetes mode).
       component: "kubernetes"
+      # Resolver component version. REQUIRED by the Configuration CRD
+      # (spec.nameResolution.version); every built-in resolver is "v1".
+      version: "v1"
       # Address template, Go text/template over Dapr's ResolveRequest
       # ({{.ID}}, {{.Namespace}}, {{.Port}}, {{.Data.*}}).
       #
