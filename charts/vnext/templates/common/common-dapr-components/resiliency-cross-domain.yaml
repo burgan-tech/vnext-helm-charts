@@ -46,16 +46,21 @@ spec:
         policy: constant
         duration: 1s
         maxRetries: 0
-  {{- with .Values.global.dapr.crossDomainTargets }}
-  # Optional explicit per-domain targets (DOMAIN names in values; the app-id is composed here).
-  # Redundant with the defaults above unless a domain needs a different policy later; kept so a
-  # per-domain tweak has a home without changing the defaults.
+  # spec.targets is REQUIRED by the Resiliency CRD even when empty — omitting it fails the apply
+  # with "spec.targets: Required value". The default policies above need no target entry, so an
+  # empty `apps: {}` is the correct rendering when no explicit per-domain targets are listed.
   targets:
+  {{- with .Values.global.dapr.crossDomainTargets }}
+    # Optional explicit per-domain targets (DOMAIN names in values; the app-id is composed here).
+    # Redundant with the defaults above unless a domain needs a different policy later; kept so a
+    # per-domain tweak has a home without changing the defaults.
     apps:
       {{- range . }}
       {{ printf "vnext-%s-app" . }}:
         circuitBreaker: DefaultAppCircuitBreakerPolicy
         retry: DefaultAppRetryPolicy
       {{- end }}
+  {{- else }}
+    apps: {}
   {{- end }}
 {{- end }}
