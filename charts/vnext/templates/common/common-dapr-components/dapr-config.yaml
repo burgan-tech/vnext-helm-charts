@@ -19,7 +19,16 @@ spec:
   # pins mTLS to the real (namespace, app-id) pair).
   nameResolution:
     component: {{ .component | quote }}
-    {{- if or .template .clusterDomain }}
+    {{- /*
+      The Configuration CRD marks component, version AND configuration all REQUIRED;
+      omitting either of the last two fails the apply with
+      "spec.nameResolution.version: Required value". configuration renders as {} when
+      neither template nor clusterDomain is set.
+    */}}
+    version: {{ .version | default "v1" | quote }}
+    {{- if not (or .template .clusterDomain) }}
+    configuration: {}
+    {{- else }}
     configuration:
       {{- /*
         `template` is quoted straight from values so its {{.ID}} / {{.Namespace}} /

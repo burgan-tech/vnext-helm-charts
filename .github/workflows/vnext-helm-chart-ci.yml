@@ -175,22 +175,21 @@ jobs:
           fi
           echo "OK: nonprod profile == chart default"
 
-      - name: Assert every Dapr Resiliency carries spec.targets
+      - name: Assert every Dapr object has its CRD-required fields
         run: |
-          # helm lint/template do not validate against CRD schemas. The Resiliency CRD marks
-          # spec.targets REQUIRED (even if empty); a missing block only fails at apply time:
-          #   Resiliency.dapr.io "..." is invalid: spec.targets: Required value
+          # helm lint/template do not validate against CRD schemas, so a missing required
+          # field only fails at apply time (spec.targets on a Resiliency, and
+          # spec.nameResolution.version on the Configuration, both shipped that way).
+          # Checks every rendered dapr.io object against the vendored Dapr CRDs.
+          pip install --quiet pyyaml
           helm template test-release ${{ env.CHART_PATH }} \
-            --namespace vnext --set global.appDomain=demo > /tmp/resiliency.yaml
-          python3 - <<'EOF'
-          import sys
-          bad = [b for b in open('/tmp/resiliency.yaml').read().split('\n---')
-                 if 'kind: Resiliency' in b and '\n  targets:' not in b]
-          for b in bad:
-              print('::error::Resiliency without spec.targets:\n' + b[:400])
-          sys.exit(1 if bad else 0)
-          EOF
-          echo "OK: every Resiliency declares spec.targets"
+            --namespace vnext --set global.appDomain=demo > /tmp/dapr-crd.yaml
+          python3 .github/scripts/check-dapr-crd-required.py \
+            ${{ env.CHART_PATH }}/charts/dapr/crds /tmp/dapr-crd.yaml
+          for p in nonprod low normal high; do
+            python3 .github/scripts/check-dapr-crd-required.py \
+              ${{ env.CHART_PATH }}/charts/dapr/crds /tmp/profile-$p.yaml
+          done
 
       - name: Assert every Redis component carries a bounded connection pool
         run: |
