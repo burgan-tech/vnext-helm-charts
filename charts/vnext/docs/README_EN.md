@@ -287,6 +287,32 @@ global:
 
 The list defaults to `[]` (nothing rendered). Requires Dapr 1.15+ (the bundled Dapr subchart satisfies this). `spec.metadata` and `auth` are passed through verbatim, so any provider-specific metadata and `secretKeyRef` structures are supported.
 
+#### Blob Storage Bindings (x-storage)
+
+Master-schema fields marked `x-storage` can offload file bytes to an object store through Dapr output bindings. Declare the bindings from `global.blobStorageComponents`; each entry renders a Dapr Component scoped to the **orchestrator (`vnext-<appDomain>-app`) sidecar only**, the only host that writes and reads file objects. The `name` is what a schema's `x-storage.binding` references. Credentials go through `secretKeyRef`, never inline values.
+
+```yaml
+global:
+  blobStorageComponents:
+    - name: vnext-blob-s3
+      spec:
+        type: bindings.aws.s3
+        version: v1
+        metadata:
+          - name: bucket
+            value: tts-bucket
+          - name: region
+            value: us-east-1
+          - name: accessKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-access-key }
+          - name: secretKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-secret-key }
+      auth:
+        secretStore: vnext-secret
+```
+
+The list defaults to `[]` (nothing rendered).
+
 #### Telemetry Configuration
 
 ```yaml

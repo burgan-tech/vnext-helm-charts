@@ -287,6 +287,32 @@ global:
 
 Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz). Dapr 1.15+ gerektirir (paketlenmiş Dapr subchart bunu karşılar). `spec.metadata` ve `auth` birebir aktarılır; bu nedenle sağlayıcıya özgü tüm metadata ve `secretKeyRef` yapıları desteklenir.
 
+#### Blob Depolama Bağlayıcıları (x-storage)
+
+`x-storage` ile işaretlenmiş master-şema alanları, dosya içeriğini Dapr output binding'leri üzerinden bir nesne deposuna taşıyabilir. Bağlayıcıları `global.blobStorageComponents` altında tanımlayın; her kayıt yalnızca **orchestrator (`vnext-<appDomain>-app`) sidecar'ına** kapsamlı bir Dapr Component üretir, çünkü dosya nesnelerini yazan ve okuyan tek host odur. `name` değeri, bir şemanın `x-storage.binding` alanında referans verdiği addır. Kimlik bilgileri satır içi değer olarak değil, `secretKeyRef` ile verilmelidir.
+
+```yaml
+global:
+  blobStorageComponents:
+    - name: vnext-blob-s3
+      spec:
+        type: bindings.aws.s3
+        version: v1
+        metadata:
+          - name: bucket
+            value: tts-bucket
+          - name: region
+            value: us-east-1
+          - name: accessKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-access-key }
+          - name: secretKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-secret-key }
+      auth:
+        secretStore: vnext-secret
+```
+
+Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz).
+
 #### Telemetri Yapılandırması
 
 ```yaml
