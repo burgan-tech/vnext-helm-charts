@@ -313,6 +313,24 @@ global:
 
 The list defaults to `[]` (nothing rendered).
 
+For an S3-compatible on-premise store (MinIO, a bank S3 endpoint) also set `endpoint` and `forcePathStyle: "true"` in `metadata`.
+
+Runtime settings that go with the bindings, under `orchestrator.appEnvConfig`:
+
+```yaml
+orchestrator:
+  appEnvConfig:
+    # A stored handle is trusted only when its component is declared by the flow's own master schema
+    # or listed here. List every blob binding whose handles may cross flows (SubFlow input/output
+    # mappings copying a handle into a flow that declares a different binding).
+    FileStorage__AllowedBindings__0: "vnext-blob-s3"
+    # Prefix for every object key; keeps runtime objects apart in a shared bucket. Never change it
+    # after the first write.
+    FileStorage__KeyPrefix: "vnext-runtime/"
+```
+
+Without `AllowedBindings` (default: empty) a flow can only carry and read handles of the bindings its own master schema declares; a handle copied from a flow with a different binding is rejected with 400 (`Instance:100048`) on write and 404 on read.
+
 #### Telemetry Configuration
 
 ```yaml

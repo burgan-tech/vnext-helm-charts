@@ -313,6 +313,24 @@ global:
 
 Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz).
 
+Kurum içi S3 uyumlu bir depoda (MinIO, bankanın S3 ucu) `metadata`'ya `endpoint` ve `forcePathStyle: "true"` da eklenmelidir.
+
+Binding'lerle birlikte verilen runtime ayarları (`orchestrator.appEnvConfig` altında):
+
+```yaml
+orchestrator:
+  appEnvConfig:
+    # Saklı bir handle'a yalnız component'i akışın kendi master şemasında tanımlıysa ya da burada
+    # listelenmişse güvenilir. Handle'ı akışlar arasında taşınabilecek her blob binding'ini listeleyin
+    # (farklı binding tanımlayan akışa handle kopyalayan SubFlow girdi/çıktı eşlemeleri).
+    FileStorage__AllowedBindings__0: "vnext-blob-s3"
+    # Her nesne anahtarının öneki; paylaşılan bir kovada runtime nesnelerini ayırır. İlk yazımdan sonra
+    # değiştirilmemelidir.
+    FileStorage__KeyPrefix: "vnext-runtime/"
+```
+
+`AllowedBindings` boşsa (varsayılan) bir akış yalnız kendi master şemasının tanımladığı binding'lerin handle'larını taşıyıp okuyabilir; farklı binding'li bir akıştan kopyalanan handle yazmada 400 (`Instance:100048`), okumada 404 alır.
+
 #### Telemetri Yapılandırması
 
 ```yaml
