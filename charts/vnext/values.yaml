@@ -56,6 +56,42 @@ global:
     #   auth:
     #     secretStore: vnext-secret
 
+  # Blob storage bindings for master-schema fields marked x-storage. Scoped to the orchestrator
+  # sidecar only (the only host that writes and reads file objects). The component name is what a
+  # schema's x-storage.binding references. Credentials via secretKeyRef (auth.secretStore).
+  # Rendered by vnext-blob-storage-template.yaml.
+  blobStorageComponents: []
+    # - name: vnext-blob-s3
+    #   spec:
+    #     type: bindings.aws.s3
+    #     version: v1
+    #     metadata:
+    #       - name: bucket
+    #         value: tts-bucket
+    #       - name: region
+    #         value: us-east-1
+    #       - name: endpoint
+    #         value: https://s3.bank.local
+    #       - name: forcePathStyle
+    #         value: "true"
+    #       - name: accessKey
+    #         secretKeyRef: { name: vnext-secret, key: blob-s3-access-key }
+    #       - name: secretKey
+    #         secretKeyRef: { name: vnext-secret, key: blob-s3-secret-key }
+    #   auth:
+    #     secretStore: vnext-secret
+  #
+  # Runtime settings that go with these bindings (set them in orchestrator.appEnvConfig):
+  #   FileStorage__AllowedBindings__0: "vnext-blob-s3"
+  #     A stored file handle is only trusted when its `component` is a binding the flow's own master
+  #     schema declares (x-storage.binding) OR is listed here. List every blob binding of this domain
+  #     whose handles may cross flows: a SubFlow output/input mapping that copies a handle into a flow
+  #     declaring a DIFFERENT binding is rejected (400 / pipeline error) until the binding is listed.
+  #     Add one entry per binding (__0, __1, ...). Empty (default) = only the flow's own bindings.
+  #   FileStorage__KeyPrefix: "vnext-runtime/"
+  #     Prefix for every object key (keeps runtime objects under their own prefix in a shared bucket).
+  #     Never change it after the first write: existing handles would point at missing objects.
+
   # Dynamic subscriptions for event-driven workflows.
   # Each entry renders a Dapr Subscription (v2alpha1) scoped to the orchestrator sidecar.
   subscriptionComponents: []
@@ -753,6 +789,9 @@ orchestrator:
     Logging__LogLevel__Default: "Debug"
     # Base path for URL templates (empty = no base path)
     UrlTemplates__BasePath: ""
+    # x-storage file offload (see global.blobStorageComponents):
+    # FileStorage__AllowedBindings__0: "vnext-blob-s3"
+    # FileStorage__KeyPrefix: "vnext-runtime/"
 
   # ---------------------------------------------------------------------------
   # Plugins

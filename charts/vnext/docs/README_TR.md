@@ -287,6 +287,50 @@ global:
 
 Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz). Dapr 1.15+ gerektirir (paketlenmiş Dapr subchart bunu karşılar). `spec.metadata` ve `auth` birebir aktarılır; bu nedenle sağlayıcıya özgü tüm metadata ve `secretKeyRef` yapıları desteklenir.
 
+#### Blob Depolama Bağlayıcıları (x-storage)
+
+`x-storage` ile işaretlenmiş master-şema alanları, dosya içeriğini Dapr output binding'leri üzerinden bir nesne deposuna taşıyabilir. Bağlayıcıları `global.blobStorageComponents` altında tanımlayın; her kayıt yalnızca **orchestrator (`vnext-<appDomain>-app`) sidecar'ına** kapsamlı bir Dapr Component üretir, çünkü dosya nesnelerini yazan ve okuyan tek host odur. `name` değeri, bir şemanın `x-storage.binding` alanında referans verdiği addır. Kimlik bilgileri satır içi değer olarak değil, `secretKeyRef` ile verilmelidir.
+
+```yaml
+global:
+  blobStorageComponents:
+    - name: vnext-blob-s3
+      spec:
+        type: bindings.aws.s3
+        version: v1
+        metadata:
+          - name: bucket
+            value: tts-bucket
+          - name: region
+            value: us-east-1
+          - name: accessKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-access-key }
+          - name: secretKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-secret-key }
+      auth:
+        secretStore: vnext-secret
+```
+
+Liste varsayılan olarak `[]`'dir (hiçbir kaynak oluşturulmaz).
+
+Kurum içi S3 uyumlu bir depoda (MinIO, bankanın S3 ucu) `metadata`'ya `endpoint` ve `forcePathStyle: "true"` da eklenmelidir.
+
+Binding'lerle birlikte verilen runtime ayarları (`orchestrator.appEnvConfig` altında):
+
+```yaml
+orchestrator:
+  appEnvConfig:
+    # Saklı bir handle'a yalnız component'i akışın kendi master şemasında tanımlıysa ya da burada
+    # listelenmişse güvenilir. Handle'ı akışlar arasında taşınabilecek her blob binding'ini listeleyin
+    # (farklı binding tanımlayan akışa handle kopyalayan SubFlow girdi/çıktı eşlemeleri).
+    FileStorage__AllowedBindings__0: "vnext-blob-s3"
+    # Her nesne anahtarının öneki; paylaşılan bir kovada runtime nesnelerini ayırır. İlk yazımdan sonra
+    # değiştirilmemelidir.
+    FileStorage__KeyPrefix: "vnext-runtime/"
+```
+
+`AllowedBindings` boşsa (varsayılan) bir akış yalnız kendi master şemasının tanımladığı binding'lerin handle'larını taşıyıp okuyabilir; farklı binding'li bir akıştan kopyalanan handle yazmada 400 (`Instance:100048`), okumada 404 alır.
+
 #### Telemetri Yapılandırması
 
 ```yaml

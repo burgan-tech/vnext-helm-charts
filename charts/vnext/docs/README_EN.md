@@ -287,6 +287,50 @@ global:
 
 The list defaults to `[]` (nothing rendered). Requires Dapr 1.15+ (the bundled Dapr subchart satisfies this). `spec.metadata` and `auth` are passed through verbatim, so any provider-specific metadata and `secretKeyRef` structures are supported.
 
+#### Blob Storage Bindings (x-storage)
+
+Master-schema fields marked `x-storage` can offload file bytes to an object store through Dapr output bindings. Declare the bindings from `global.blobStorageComponents`; each entry renders a Dapr Component scoped to the **orchestrator (`vnext-<appDomain>-app`) sidecar only**, the only host that writes and reads file objects. The `name` is what a schema's `x-storage.binding` references. Credentials go through `secretKeyRef`, never inline values.
+
+```yaml
+global:
+  blobStorageComponents:
+    - name: vnext-blob-s3
+      spec:
+        type: bindings.aws.s3
+        version: v1
+        metadata:
+          - name: bucket
+            value: tts-bucket
+          - name: region
+            value: us-east-1
+          - name: accessKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-access-key }
+          - name: secretKey
+            secretKeyRef: { name: vnext-secret, key: blob-s3-secret-key }
+      auth:
+        secretStore: vnext-secret
+```
+
+The list defaults to `[]` (nothing rendered).
+
+For an S3-compatible on-premise store (MinIO, a bank S3 endpoint) also set `endpoint` and `forcePathStyle: "true"` in `metadata`.
+
+Runtime settings that go with the bindings, under `orchestrator.appEnvConfig`:
+
+```yaml
+orchestrator:
+  appEnvConfig:
+    # A stored handle is trusted only when its component is declared by the flow's own master schema
+    # or listed here. List every blob binding whose handles may cross flows (SubFlow input/output
+    # mappings copying a handle into a flow that declares a different binding).
+    FileStorage__AllowedBindings__0: "vnext-blob-s3"
+    # Prefix for every object key; keeps runtime objects apart in a shared bucket. Never change it
+    # after the first write.
+    FileStorage__KeyPrefix: "vnext-runtime/"
+```
+
+Without `AllowedBindings` (default: empty) a flow can only carry and read handles of the bindings its own master schema declares; a handle copied from a flow with a different binding is rejected with 400 (`Instance:100048`) on write and 404 on read.
+
 #### Telemetry Configuration
 
 ```yaml
