@@ -307,6 +307,11 @@ global:
     # matches neither yields "" = single-namespace resolution (bare app-id).
     crossNamespaceTemplate: ""
     # ---------------------------------------------------------------------------
+    # Pubsub
+    pubsub:
+      type: "redis" # Default: redis. Use "redis" or "kafka"
+
+    # ---------------------------------------------------------------------------
     # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, lock)
     # ---------------------------------------------------------------------------
     # THE CONNECTION-POOL KNOB. Left unset, the go-redis client inside daprd sizes
@@ -496,6 +501,37 @@ global:
   # Example: "redis.example.com:6379" or "redis-cluster.svc:6379"
   externalRedis:
       endpoint: ""
+
+  # External Kafka endpoint configuration
+  externalKafka:
+      endpoint: ""
+      # Extra pubsub.kafka metadata, as a list in the same {name, value} shape the Dapr
+      # component itself uses; each entry is appended to the component unchanged.
+      # - name MUST be the exact Dapr metadata name (case-sensitive: consumerID, not
+      #   consumerId). A misspelled name renders fine and is silently ignored by Dapr.
+      # - Use secretKeyRef ({name, key}) instead of value to read from the secret store.
+      # - An entry whose value is "" is omitted, leaving the setting at Dapr's default.
+      # - brokers, authType, saslUsername and saslPassword are rendered by the chart from
+      #   endpoint and auth below; listing them here fails the render.
+      metadata: [] # https://docs.dapr.io/reference/components-reference/supported-pubsub/setup-apache-kafka/
+        # - name: consumerGroup # Optional. Used for input bindings.
+        #   value: "{namespace}"
+        # - name: consumerID # Optional. If not supplied, runtime will create one.
+        #   value: "channel1"
+        # - name: clientID # Optional. Used as client tracing ID by Kafka brokers.
+        #   value: "my-dapr-app-id"
+        # - name: saslMechanism
+        #   value: "SHA-512"
+        # - name: disableTls
+        #   value: "true"
+      auth: # TODO: 
+        useSecretEngine: false #set to true if using vault secret engine
+        secret:
+          name: "" #secret name in vault
+          usernameKey: "" #secret key for username in vault
+          passwordKey: "" #secret key for password in vault
+        username: ""
+        password: ""
   
   # -----------------------------------------------------------------------------
   # Resource Defaults

@@ -461,6 +461,22 @@ one place that actually knows the namespace.
 {{- end -}}
 {{- end -}}
 
+{{/*
+Fail the render when global.dapr.pubsub.type is not a supported broker. Without this an
+unknown value (a typo such as "Redis" or "kafak") matches neither pubsub-redis.yaml nor
+pubsub-kafka.yaml, so the release renders with NO pubsub component and the apps only
+fail at runtime on their first publish/subscribe.
+Same reason as vnext.validateNameResolution for not living in vnext.validateValues; it is
+included from both pubsub templates so it also runs under `helm template -s`.
+Usage: {{ include "vnext.validatePubsubType" . }}
+*/}}
+{{- define "vnext.validatePubsubType" -}}
+{{- $type := ((.Values.global.dapr).pubsub).type -}}
+{{- if not (has $type (list "redis" "kafka")) -}}
+{{- fail (printf "global.dapr.pubsub.type must be \"redis\" or \"kafka\", got %q" (toString $type)) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vnext.validateNameResolution" -}}
 {{- with .Values.global.dapr.nameResolution -}}
   {{- $messages := list -}}

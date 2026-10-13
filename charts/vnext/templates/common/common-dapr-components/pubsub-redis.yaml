@@ -1,3 +1,5 @@
+{{- include "vnext.validatePubsubType" . -}}
+{{- if eq .Values.global.dapr.pubsub.type "redis" }}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -29,3 +31,4 @@ spec:
 auth:
   secretStore: {{ include "vnext.fullname" . }}-secret
 {{- include "vnext.daprRedisScopes" (dict "root" . "key" "pubsub") }}
+{{- end }}

@@ -1,0 +1,56 @@
+{{- include "vnext.validatePubsubType" . -}}
+{{- if eq .Values.global.dapr.pubsub.type "kafka" }}
+{{- $kafka := .Values.global.externalKafka }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "vnext.fullname" . }}-pubsub
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+  - name: brokers
+    value: {{ $kafka.endpoint | quote }}
+  - name: authType
+    value: "password"
+  - name: saslUsername
+    {{- if $kafka.auth.useSecretEngine }}
+    secretKeyRef:
+      name: {{ $kafka.auth.secret.name }}
+      key: {{ $kafka.auth.secret.usernameKey }}
+    {{- else }}
+    value: {{ $kafka.auth.username | quote }}
+    {{- end }}
+  - name: saslPassword
+    {{- if $kafka.auth.useSecretEngine }}
+    secretKeyRef:
+      name: {{ $kafka.auth.secret.name }}
+      key: {{ $kafka.auth.secret.passwordKey }}
+    {{- else }}
+    value: {{ $kafka.auth.password | quote }}
+    {{- end }}
+  {{- /* Every entry of externalKafka.metadata is emitted as a {name, value} or
+       {name, secretKeyRef} pair; an entry whose value is "" is omitted. */}}
+  {{- range $i, $m := $kafka.metadata | default list }}
+  {{- if not $m.name }}
+  {{- fail (printf "global.externalKafka.metadata[%d].name is required" $i) }}
+  {{- end }}
+  {{- if has $m.name (list "brokers" "authType" "saslUsername" "saslPassword") }}
+  {{- fail (printf "global.externalKafka.metadata[%d]: %q is rendered by the chart from endpoint/auth; remove it from metadata" $i $m.name) }}
+  {{- end }}
+  {{- $v := $m.value }}
+  {{- /* Helm reads YAML numbers as float64, so 1048576 would print as 1.048576e+06. */}}
+  {{- if and (kindIs "float64" $v) (eq $v (floor $v)) }}{{- $v = int64 $v }}{{- end }}
+  {{- if $m.secretKeyRef }}
+  - name: {{ $m.name }}
+    secretKeyRef:
+      {{- toYaml $m.secretKeyRef | nindent 6 }}
+  {{- else if and (not (kindIs "invalid" $v)) (ne ($v | toString) "") }}
+  - name: {{ $m.name }}
+    value: {{ $v | toString | quote }}
+  {{- end }}
+  {{- end }}
+auth:
+  secretStore: {{ include "vnext.fullname" . }}-secret
+{{- include "vnext.daprRedisScopes" (dict "root" . "key" "pubsub") }}
+{{- end }}
