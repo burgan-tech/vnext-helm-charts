@@ -309,7 +309,11 @@ global:
     # ---------------------------------------------------------------------------
     # Pubsub
     pubsub:
-      type: "redis" # Default: redis. Use "redis" or "kafka"
+      # Broker for the runtime's own pub/sub (DAPR_PUBSUB_STORE_NAME): "redis" (default) or
+      # "kafka". "kafka" renders one pubsub.kafka component per host from global.externalKafka
+      # below. The orchestrator's broadcast store (<fullname>-pubsub-broadcast) stays on Redis
+      # either way.
+      type: "redis"
 
     # ---------------------------------------------------------------------------
     # Dapr Redis client tuning (state, pubsub, pubsub-broadcast, lock)
@@ -508,8 +512,16 @@ global:
       # Extra pubsub.kafka metadata PER HOST. With pubsub.type "kafka" the chart renders
       # one component per host (<fullname>-pubsub-orchestrator / -execution /
       # -worker-inbox / -worker-outbox), each scoped to that host's sidecar only, and
-      # sets the host's DAPR_PUBSUB_STORE_NAME to it. So e.g. each host can have its own
-      # consumerGroup / clientID. Keys: orchestrator | execution | inbox | outbox.
+      # sets the host's DAPR_PUBSUB_STORE_NAME to it. So each host can have its own
+      # consumerID / clientID. Keys: orchestrator | execution | inbox | outbox.
+      #
+      # Topics and ACLs: from runtime 0.0.100 every runtime topic is
+      # vnext.{appDomain}.{ASPNETCORE_ENVIRONMENT lower-cased}.{event}.v{n}, and the broker
+      # grants a domain's user vnext.{appDomain}.* on topics AND consumer groups. The chart
+      # sets no consumerID/consumerGroup; the deployment pipeline supplies them per host. The
+      # group a host joins must sit inside vnext.{appDomain}.* and differ per host (each host
+      # consumes its own topics). Left unset, Dapr uses the host's app-id (vnext-core-app ...)
+      # as the group, which is outside that prefix and is refused by the ACL.
       # Each key is a list in the same {name, value} shape the Dapr component uses;
       # each entry is appended to that host's component unchanged.
       # - name MUST be the exact Dapr metadata name (case-sensitive: consumerID, not
@@ -524,17 +536,20 @@ global:
         execution: []
         inbox: []
         outbox: []
-        # - name: consumerGroup # Optional. Used for input bindings.
-        #   value: "{namespace}"
-        # - name: consumerID # Optional. If not supplied, runtime will create one.
-        #   value: "channel1"
-        # - name: clientID # Optional. Used as client tracing ID by Kafka brokers.
-        #   value: "my-dapr-app-id"
+        # - name: consumerID # Kafka consumer group of this host. Unset = the Dapr app-id.
+        #   value: "vnext.core.production.orchestrator" # set by the pipeline; keep it in vnext.{appDomain}.*
+        # - name: consumerGroup # Optional. When set it wins: Dapr ignores consumerID and joins
+        #   value: "vnext.core.production.orchestrator" # this group. Same prefix rule.
+        # - name: clientID # Optional. Client id the brokers see in logs/metrics.
+        #   value: "vnext-core-app"
         # - name: saslMechanism
         #   value: "SHA-512"
         # - name: disableTls
         #   value: "true"
-      auth: # TODO: 
+      # SASL credentials. The chart always renders authType "password" (SASL); mTLS / OIDC /
+      # no-auth are not selectable here. Pick the mechanism with a saslMechanism metadata entry
+      # (default PLAINTEXT per Dapr) and TLS with disableTls / caCert entries.
+      auth:
         useSecretEngine: false #set to true if using vault secret engine
         secret:
           name: "" #secret name in vault

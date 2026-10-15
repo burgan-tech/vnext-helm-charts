@@ -16,6 +16,7 @@ Kubernetes üzerinde vNext mikro servis tabanlı iş akışı orkestrasyon siste
   - [Geliştirme Araçları](#geliştirme-araçları)
 - [Harici Vault Kullanımı](#harici-vault-kullanımı)
 - [Harici Redis Kullanımı](#harici-redis-kullanımı)
+- [Pub/Sub için Kafka Kullanımı](#pubsub-için-kafka-kullanımı)
 - [Harici OpenTelemetry Collector Kullanımı](#harici-opentelemetry-collector-kullanımı)
 - [Ingress Yapılandırması](#ingress-yapılandırması)
 - [Otomatik Ölçeklendirme](#otomatik-ölçeklendirme)
@@ -831,6 +832,53 @@ redis-sentinel:
   enabled: false              # yerleşik Redis'i devre dışı bırak
 ```
 
+## Pub/Sub için Kafka Kullanımı
+
+Runtime'ın kendi pub/sub'ı (instance event'leri, outbox, inbox) varsayılan olarak Redis üzerinde çalışır.
+Kafka'ya geçmek için `global.dapr.pubsub.type: "kafka"` verilir:
+
+```yaml
+global:
+  dapr:
+    pubsub:
+      type: "kafka"                       # "redis" (varsayılan) veya "kafka"; başka değer render'ı durdurur
+  externalKafka:
+    endpoint: "kafka-1:9093,kafka-2:9093" # -> brokers
+    auth:
+      useSecretEngine: true               # saslUsername / saslPassword secret store'dan okunur
+      secret:
+        name: vnext-secret
+        usernameKey: kafka-username
+        passwordKey: kafka-password
+    metadata:                             # host başına ek pubsub.kafka metadata'sı
+      orchestrator:
+        - { name: consumerID, value: "vnext.core.production.orchestrator" }
+        - { name: saslMechanism, value: "SHA-512" }
+      execution:
+        - { name: consumerID, value: "vnext.core.production.execution" }
+      inbox:
+        - { name: consumerID, value: "vnext.core.production.worker-inbox" }
+      outbox:
+        - { name: consumerID, value: "vnext.core.production.worker-outbox" }
+```
+
+- Chart dört `pubsub.kafka` component'i üretir: `<fullname>-pubsub-orchestrator`, `-execution`,
+  `-worker-inbox` ve `-worker-outbox`. Her biri yalnız kendi host'unun sidecar'ına scope'lanır ve o
+  host'un `DAPR_PUBSUB_STORE_NAME` değeri bu component'i gösterir. Orchestrator'ın broadcast store'u
+  (`<fullname>-pubsub-broadcast`) Redis'te kalır.
+- `brokers`, `authType` (her zaman `password`, yani SASL), `saslUsername` ve `saslPassword` değerleri
+  `endpoint` ve `auth` alanlarından gelir; `metadata` altında yazılırlarsa render hata verir. Diğer Dapr
+  Kafka metadata'sı (`saslMechanism`, `disableTls`, `caCert`, `clientID` …) `metadata.<host>` altında
+  `{name, value}` veya `{name, secretKeyRef}` olarak verilir. İsimler büyük-küçük harf duyarlıdır;
+  değeri `""` olan girdi atlanır.
+- **Topic'ler ve consumer group'lar.** Runtime 0.0.100'den itibaren tüm runtime topic'leri
+  `vnext.{appDomain}.{environment}.{event}.v{n}` biçimindedir (`{environment}` = küçük harfli
+  `ASPNETCORE_ENVIRONMENT`). Broker her domain kullanıcısına topic ve consumer group'larda
+  `vnext.{appDomain}.*` yetkisi verir. Chart `consumerID` ve `consumerGroup` set etmez; değerleri deployment
+  pipeline'ı her host için verir. Her host'un katıldığı group bu prefix içinde olmalı ve host'lar arasında
+  farklı olmalıdır. `consumerGroup` verilirse önceliklidir; Dapr `consumerID`'yi yok sayar. Hiçbiri
+  verilmezse Dapr host'un app-id'sini (`vnext-core-app` …) group olarak kullanır ve ACL bunu reddeder.
+
 ## Harici OpenTelemetry Collector Kullanımı
 
 ```yaml
@@ -1085,6 +1133,15 @@ helm upgrade vnext . -n vnext --timeout 20m -f my-values.yaml
 helm history vnext -n vnext
 ```
 
+### Chart 1.0.123'e (runtime 0.0.100) güncelleme
+
+- Runtime topic adları `vnext.{appDomain}.{environment}.*` olarak değişir. Eski topic'lerde kalan mesajlar
+  tüketilmez; güncellemeden önce yazılmış outbox satırları eski topic adını taşır: **rollout'tan önce
+  outbox'ı boşaltın**. Kafka kullanılıyorsa bkz. [Pub/Sub için Kafka Kullanımı](#pubsub-için-kafka-kullanımı).
+- Orchestration → Execution gRPC transport'u runtime'dan kaldırıldı. `execution.grpcPort`,
+  `Kestrel__GrpcPort` ve `orchestrator.appEnvConfig.ExecutionApi__Transport` artık yok; bunları set eden
+  bir override etkisizdir. `execution.dapr.protocol` `"http"` kalmalıdır.
+
 ### Geri Alma
 
 ```bash
@@ -1132,6 +1189,10 @@ kubectl delete namespace vnext
 | `global.database.connectionString` | PostgreSQL bağlantı dizesi | `"Host=vnext-postgres-headless;..."` |
 | `global.database.clickhouse.enabled` | ClickHouse entegrasyonu | `false` |
 | `global.externalRedis.endpoint` | Harici Redis endpoint'i | `""` |
+| `global.dapr.pubsub.type` | Runtime pub/sub broker'ı: `redis` veya `kafka` | `"redis"` |
+| `global.externalKafka.endpoint` | Kafka broker'ları (virgülle ayrılmış) | `""` |
+| `global.externalKafka.auth.*` | SASL kimlik bilgileri, doğrudan veya secret store'dan | – |
+| `global.externalKafka.metadata.<host>` | Host başına ek `pubsub.kafka` metadata'sı (`orchestrator`, `execution`, `inbox`, `outbox`) | `[]` |
 | `global.resources.default` | Tüm bileşenler için tek boyut. Varsayılan boştur, bileşen bazlı `resourcesFallback` uygulanır; bkz. [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
 | `global.dapr.redis.poolSize` | Bileşen başına paylaşılan Redis client pool'u; `state`/`lock`/`pubsub` altında kind bazlı override edilebilir | `10` |
 | `global.dapr.redis.pubsub.concurrency` | Eşzamanlı pub/sub handler çağrısı üst sınırı | `5` |

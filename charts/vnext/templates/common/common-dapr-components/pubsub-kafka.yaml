@@ -2,7 +2,7 @@
 {{- if eq .Values.global.dapr.pubsub.type "kafka" }}
 {{- $root := . }}
 {{- $kafka := .Values.global.externalKafka }}
-{{- /* One component per pubsub host so each gets its own metadata (consumerGroup,
+{{- /* One component per pubsub host so each gets its own metadata (consumerID,
        clientID ...). component -> its key under global.externalKafka.metadata.
        The component name must match vnext.pubsubStoreName, which feeds the host's
        DAPR_PUBSUB_STORE_NAME. */}}
