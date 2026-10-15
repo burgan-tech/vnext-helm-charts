@@ -1,0 +1,18 @@
+{{- range .Values.global.cronBindingComponents }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .name }}
+spec:
+  type: {{ .spec.type | default "bindings.cron" }}
+  version: {{ .spec.version | default "v1" }}
+  metadata:
+  {{- toYaml .spec.metadata | nindent 4 }}
+{{- if .auth }}
+auth:
+  {{- toYaml .auth | nindent 2 }}
+{{- end }}
+scopes:
+- {{ include "vnext.cronBindingAppId" $ | quote }}
+{{- end }}

@@ -331,6 +331,45 @@ orchestrator:
 
 Without `AllowedBindings` (default: empty) a flow can only carry and read handles of the bindings its own master schema declares; a handle copied from a flow with a different binding is rejected with 400 (`Instance:100048`) on write and 404 on read.
 
+#### Cron Bindings (Scheduled Workflow Start)
+
+A workflow can be started on a schedule by a Dapr cron input binding that calls the runtime's `instances/schedule` endpoint. Declare the schedules from `global.cronBindingComponents`, one component per schedule; each entry renders a Dapr Component scoped to the **cron relay (`vnext-<appDomain>-cron-relay-app`)** described below. `spec.type` / `spec.version` default to `bindings.cron` / `v1`.
+
+```yaml
+global:
+  cronBindingComponents:
+    - name: rezervation-daily-1135
+      spec:
+        metadata:
+          - name: schedule
+            value: "CRON_TZ=Europe/Istanbul 0 35 11 * * *"
+          - name: direction
+            value: "input"
+          - name: route
+            value: "/api/v1/morph-touch/workflows/rezervation/instances/schedule?scheduleId=daily-1135"
+```
+
+The list defaults to `[]` (nothing rendered).
+
+- The cron binding's own metadata never reaches the app, so the domain, the workflow and the schedule identity all go in `route`.
+- Give each component its own `scheduleId`; it is part of the instance key, and two schedules on the same workflow without one collapse into a single instance when their ticks coincide.
+- Other query parameters (except `version` and `sync`) become instance attributes, always as strings.
+
+##### Cron relay
+
+`bindings.cron` has no leader election: every sidecar that loads a cron component runs its own ticker. Scoped to an HPA-scaled orchestrator, each tick would fire once per replica and start duplicate instances. The chart therefore loads the cron components into a small relay instead:
+
+```
+cron component ──► cron-relay sidecar ──► nginx ──► sidecar /v1.0/invoke/<orchestrator app-id>/method/<route> ──► ONE orchestrator replica
+```
+
+- Stock `nginxinc/nginx-unprivileged` image with a chart-rendered config; no vNext code. Path, query string and the `readTimeUTC` header are forwarded unchanged.
+- Always **1 replica** with a **Recreate** strategy (not configurable): a second relay pod, even during a rolling update, would fire every tick twice. The relay restarts automatically when the cron components change.
+- Rendered only when `global.cronBindingComponents` is non-empty. Settings live under `cron-relay` (image, resources, `daprHttpPort`, ...). Mirror the image to the internal registry where Docker Hub is not reachable.
+- Trade-off: a tick that falls in a relay restart (upgrade, node drain) is lost; `bindings.cron` does not catch up.
+- `cron-relay.enabled: false` scopes the components to the orchestrator instead: only safe with a single orchestrator replica.
+
+
 #### Telemetry Configuration
 
 ```yaml

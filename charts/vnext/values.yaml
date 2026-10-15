@@ -92,6 +92,31 @@ global:
   #     Prefix for every object key (keeps runtime objects under their own prefix in a shared bucket).
   #     Never change it after the first write: existing handles would point at missing objects.
 
+  # Cron input bindings that start a workflow instance on a schedule (scheduled workflow start).
+  # One component per SCHEDULE. Rendered by vnext-cron-binding-template.yaml.
+  # Scoped to the cron-relay (see the cron-relay section), a single-replica pod that forwards each
+  # tick to the orchestrator through Dapr service invocation -- so a tick starts ONE instance however
+  # many orchestrator replicas run. With cron-relay.enabled=false they are scoped to the orchestrator
+  # instead, and every orchestrator replica fires every tick.
+  # spec.type / spec.version default to bindings.cron / v1.
+  # - schedule: cron expression (with seconds) or @every <duration>; prefix CRON_TZ=<zone> for a timezone.
+  # - route: everything the runtime needs travels here -- the binding's other metadata never reaches
+  #   the app. /api/v1/<domain>/workflows/<workflow>/instances/schedule?scheduleId=<id>[&version=..][&<attr>=..]
+  #   Give each component its own scheduleId (it is part of the instance key); extra query params become
+  #   string instance attributes.
+  cronBindingComponents: []
+    # - name: rezervation-daily-1135
+    #   spec:
+    #     type: bindings.cron
+    #     version: v1
+    #     metadata:
+    #       - name: schedule
+    #         value: "CRON_TZ=Europe/Istanbul 0 35 11 * * *"
+    #       - name: direction
+    #         value: "input"
+    #       - name: route
+    #         value: "/api/v1/morph-touch/workflows/rezervation/instances/schedule?scheduleId=daily-1135"
+
   # Dynamic subscriptions for event-driven workflows.
   # Each entry renders a Dapr Subscription (v2alpha1) scoped to the orchestrator sidecar.
   subscriptionComponents: []
@@ -1287,6 +1312,65 @@ worker-outbox:
     Logging__LogLevel__Default: "Debug"
     # SignalR hub configuration for real-time communication
     SignalR__AppId: "http://localhost:6203"
+
+# ==============================================================================
+# CRON RELAY
+# Single-replica nginx that loads the global.cronBindingComponents and forwards each
+# tick to the orchestrator via Dapr service invocation (one replica receives it).
+# Exists because bindings.cron has no leader election: scoped to the HPA-scaled
+# orchestrator, every replica's sidecar would fire every schedule. Stock image, no
+# vNext code. Rendered only when global.cronBindingComponents is non-empty.
+# ==============================================================================
+cron-relay:
+  # Set to false to scope the cron components to the orchestrator instead (one tick
+  # per orchestrator replica -- only safe with a single orchestrator replica).
+  enabled: true
+
+  # Always one replica with a Recreate strategy -- deliberately NOT configurable: a
+  # second relay pod, even briefly during a rolling update, fires every tick twice.
+  # The cost is a short gap on restart/upgrade; a tick that falls in it is lost
+  # (bindings.cron does not catch up).
+
+  image:
+    # Mirror to the internal registry where pulls from Docker Hub are blocked.
+    repository: nginxinc/nginx-unprivileged
+    tag: "1.27.4-alpine"
+    digest: ""
+    pullPolicy: ""
+  imagePullSecrets: []
+
+  # nginx listen port (nginx-unprivileged cannot bind below 1024).
+  port: 8080
+  # Port of this pod's Dapr sidecar HTTP API. On Kubernetes the injected sidecar always
+  # listens on 3500 (global.dapr.httpPort is only an app env value and does not move it).
+  daprHttpPort: 3500
+  # How long to wait for the orchestrator's schedule endpoint.
+  proxyReadTimeout: 60s
+
+  dapr:
+    enabled: true
+    # Default: vnext-<domain>-cron-relay-app
+    appId: ""
+    appPort: "8080"
+
+  podAnnotations:
+    dapr.io/config: appconfig
+  podLabels: {}
+  podSecurityContext: {}
+  # Uses global.securityContext when empty (read-only root fs is fine: nginx writes to /tmp).
+  securityContext: {}
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 16Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # ==============================================================================
 # MCP SERVER CONFIGURATION
