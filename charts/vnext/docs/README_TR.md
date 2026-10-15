@@ -331,6 +331,45 @@ orchestrator:
 
 `AllowedBindings` boşsa (varsayılan) bir akış yalnız kendi master şemasının tanımladığı binding'lerin handle'larını taşıyıp okuyabilir; farklı binding'li bir akıştan kopyalanan handle yazmada 400 (`Instance:100048`), okumada 404 alır.
 
+#### Cron Bağlayıcıları (Zamanlanmış Workflow Başlatma)
+
+Bir workflow, runtime'ın `instances/schedule` endpoint'ini çağıran bir Dapr cron input binding'i ile zamanlanmış olarak başlatılabilir. Zamanlamaları `global.cronBindingComponents` altında, her zamanlama için bir component olacak şekilde tanımlayın; her kayıt aşağıda anlatılan **cron relay'e (`vnext-<appDomain>-cron-relay-app`)** kapsamlı bir Dapr Component üretir. `spec.type` / `spec.version` varsayılan olarak `bindings.cron` / `v1`'dir.
+
+```yaml
+global:
+  cronBindingComponents:
+    - name: rezervation-daily-1135
+      spec:
+        metadata:
+          - name: schedule
+            value: "CRON_TZ=Europe/Istanbul 0 35 11 * * *"
+          - name: direction
+            value: "input"
+          - name: route
+            value: "/api/v1/morph-touch/workflows/rezervation/instances/schedule?scheduleId=daily-1135"
+```
+
+Liste varsayılan olarak `[]`'dir (hiçbir şey üretilmez).
+
+- Cron binding'in kendi metadata'sı uygulamaya hiç ulaşmaz; bu yüzden domain, workflow ve zamanlama kimliği `route` içinde taşınır.
+- Her component'e kendi `scheduleId`'sini verin; bu değer instance anahtarının parçasıdır. Aynı workflow'u hedefleyen iki zamanlama `scheduleId` olmadan, tetiklenmeleri çakıştığında tek instance'a düşer.
+- Diğer query parametreleri (`version` ve `sync` hariç) instance attribute'u olur ve her zaman string'dir.
+
+##### Cron relay
+
+`bindings.cron`'da lider seçimi yoktur: cron component'ini yükleyen her sidecar kendi zamanlayıcısını çalıştırır. HPA ile ölçeklenen orchestrator'a kapsamlansaydı her tetikleme replika sayısı kadar çalışır ve mükerrer instance'lar açılırdı. Bu yüzden chart cron component'lerini küçük bir relay'e yükler:
+
+```
+cron component ──► cron-relay sidecar ──► nginx ──► sidecar /v1.0/invoke/<orchestrator app-id>/method/<route> ──► TEK orchestrator replikası
+```
+
+- Stok `nginxinc/nginx-unprivileged` imajı ve chart'ın ürettiği config; vNext kodu yok. Path, query string ve `readTimeUTC` header'ı değiştirilmeden iletilir.
+- Her zaman **1 replika** ve **Recreate** stratejisi (değiştirilemez): ikinci bir relay pod'u, rolling update sırasında bile, her tetiklemeyi iki kez çalıştırır. Cron component'leri değiştiğinde relay otomatik yeniden başlar.
+- Yalnızca `global.cronBindingComponents` doluysa üretilir. Ayarlar `cron-relay` altındadır (imaj, kaynaklar, `daprHttpPort` ...). Docker Hub'a erişilemeyen ortamlarda imaj iç registry'ye aynalanmalıdır.
+- Bedeli: relay yeniden başlarken (upgrade, node drain) denk gelen tetikleme kaybolur; `bindings.cron` geriye dönük çalıştırmaz.
+- `cron-relay.enabled: false` component'leri orchestrator'a kapsamlar: yalnızca tek orchestrator replikasında güvenlidir.
+
+
 #### Telemetri Yapılandırması
 
 ```yaml
