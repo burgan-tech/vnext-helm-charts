@@ -259,11 +259,30 @@ DAPR_STATE_STORE_NAME: {{ printf "%s-state" $full | quote }}
 DAPR_LOCK_STORE_NAME: {{ printf "%s-redis-lock" $full | quote }}
 {{- end }}
 {{- if has $c (list "orchestrator" "execution" "worker-inbox" "worker-outbox") }}
-DAPR_PUBSUB_STORE_NAME: {{ printf "%s-pubsub" $full | quote }}
+DAPR_PUBSUB_STORE_NAME: {{ include "vnext.pubsubStoreName" (dict "root" .root "component" $c) | quote }}
 {{- end }}
 {{- if has $c (list "orchestrator") }}
 DAPR_PUBSUB_BROADCAST_STORE_NAME: {{ printf "%s-pubsub-broadcast" $full | quote }}
 {{- end }}
+{{- end }}
+
+{{/*
+Name of the pubsub component a host addresses through DAPR_PUBSUB_STORE_NAME.
+
+redis: one shared `<fullname>-pubsub` component scoped to all four pubsub hosts.
+kafka: one component PER HOST (`<fullname>-pubsub-<component>`), each carrying that
+host's own global.externalKafka.metadata.<key> (consumerGroup, clientID ...) and scoped
+to that host's sidecar alone -- see pubsub-kafka.yaml. The Dapr pubsub name is only a
+local alias; publisher and subscribers still meet on the same Kafka topic.
+Usage: {{ include "vnext.pubsubStoreName" (dict "root" . "component" "worker-inbox") }}
+*/}}
+{{- define "vnext.pubsubStoreName" -}}
+{{- $full := include "vnext.fullname" .root -}}
+{{- if eq .root.Values.global.dapr.pubsub.type "kafka" -}}
+{{- printf "%s-pubsub-%s" $full .component -}}
+{{- else -}}
+{{- printf "%s-pubsub" $full -}}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -458,6 +477,22 @@ one place that actually knows the namespace.
 {{- if and (ne .Release.Namespace $suffix) (hasSuffix $suffix .Release.Namespace) -}}
 {{- printf "%s-vnext-{domain}" (trimSuffix $suffix .Release.Namespace) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Fail the render when global.dapr.pubsub.type is not a supported broker. Without this an
+unknown value (a typo such as "Redis" or "kafak") matches neither pubsub-redis.yaml nor
+pubsub-kafka.yaml, so the release renders with NO pubsub component and the apps only
+fail at runtime on their first publish/subscribe.
+Same reason as vnext.validateNameResolution for not living in vnext.validateValues; it is
+included from both pubsub templates so it also runs under `helm template -s`.
+Usage: {{ include "vnext.validatePubsubType" . }}
+*/}}
+{{- define "vnext.validatePubsubType" -}}
+{{- $type := ((.Values.global.dapr).pubsub).type -}}
+{{- if not (has $type (list "redis" "kafka")) -}}
+{{- fail (printf "global.dapr.pubsub.type must be \"redis\" or \"kafka\", got %q" (toString $type)) -}}
 {{- end -}}
 {{- end -}}
 
