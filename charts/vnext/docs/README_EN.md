@@ -16,6 +16,7 @@ A comprehensive Helm chart for deploying the vNext microservices-based workflow 
   - [Development Tools](#development-tools)
 - [Using an External Vault](#using-an-external-vault)
 - [Using an External Redis](#using-an-external-redis)
+- [Using Kafka for Pub/Sub](#using-kafka-for-pubsub)
 - [Using an External OpenTelemetry Collector](#using-an-external-opentelemetry-collector)
 - [Ingress Configuration](#ingress-configuration)
 - [Autoscaling](#autoscaling)
@@ -831,6 +832,52 @@ redis-sentinel:
   enabled: false              # disable bundled Redis
 ```
 
+## Using Kafka for Pub/Sub
+
+The runtime's own pub/sub (instance events, outbox, inbox) runs on Redis by default. Set
+`global.dapr.pubsub.type: "kafka"` to move it to Kafka:
+
+```yaml
+global:
+  dapr:
+    pubsub:
+      type: "kafka"                       # "redis" (default) or "kafka"; anything else fails the render
+  externalKafka:
+    endpoint: "kafka-1:9093,kafka-2:9093" # -> brokers
+    auth:
+      useSecretEngine: true               # read saslUsername / saslPassword from the secret store
+      secret:
+        name: vnext-secret
+        usernameKey: kafka-username
+        passwordKey: kafka-password
+    metadata:                             # extra pubsub.kafka metadata, per host
+      orchestrator:
+        - { name: consumerID, value: "vnext.core.production.orchestrator" }
+        - { name: saslMechanism, value: "SHA-512" }
+      execution:
+        - { name: consumerID, value: "vnext.core.production.execution" }
+      inbox:
+        - { name: consumerID, value: "vnext.core.production.worker-inbox" }
+      outbox:
+        - { name: consumerID, value: "vnext.core.production.worker-outbox" }
+```
+
+- The chart renders four `pubsub.kafka` components, `<fullname>-pubsub-orchestrator`, `-execution`,
+  `-worker-inbox` and `-worker-outbox`, each scoped to its own host's sidecar, and points that host's
+  `DAPR_PUBSUB_STORE_NAME` at it. The orchestrator's broadcast store (`<fullname>-pubsub-broadcast`)
+  stays on Redis.
+- `brokers`, `authType` (always `password`, i.e. SASL), `saslUsername` and `saslPassword` come from
+  `endpoint` and `auth`; listing them under `metadata` fails the render. Any other Dapr Kafka metadata
+  (`saslMechanism`, `disableTls`, `caCert`, `clientID` …) goes under `metadata.<host>` as `{name, value}`
+  or `{name, secretKeyRef}`. Names are case-sensitive, and an entry whose value is `""` is skipped.
+- **Topics and consumer groups.** From runtime 0.0.100 every runtime topic is
+  `vnext.{appDomain}.{environment}.{event}.v{n}` (`{environment}` = `ASPNETCORE_ENVIRONMENT` lower-cased),
+  and the broker grants each domain's user `vnext.{appDomain}.*` on topics and consumer groups. The
+  chart sets neither `consumerID` nor `consumerGroup`; the deployment pipeline supplies them per host.
+  The group each host joins must sit inside that prefix and differ per host. When `consumerGroup` is
+  set it wins and Dapr ignores `consumerID`. Left unset, Dapr uses the host's app-id
+  (`vnext-core-app` …) as the group, which the ACL refuses.
+
 ## Using an External OpenTelemetry Collector
 
 ```yaml
@@ -1085,6 +1132,15 @@ helm upgrade vnext . -n vnext --timeout 20m -f my-values.yaml
 helm history vnext -n vnext
 ```
 
+### Upgrading to chart 1.0.123 (runtime 0.0.100)
+
+- Runtime topic names change to `vnext.{appDomain}.{environment}.*`. Messages left on the old topics are
+  not consumed, and outbox rows written before the upgrade keep the old topic name: **drain the outbox
+  before rolling out**. Under Kafka, see [Using Kafka for Pub/Sub](#using-kafka-for-pubsub).
+- The Orchestration → Execution gRPC transport was removed from the runtime. `execution.grpcPort`,
+  `Kestrel__GrpcPort` and `orchestrator.appEnvConfig.ExecutionApi__Transport` are gone; an override that
+  still sets them has no effect. `execution.dapr.protocol` must stay `"http"`.
+
 ### Rollback
 
 ```bash
@@ -1132,6 +1188,10 @@ kubectl delete namespace vnext
 | `global.database.connectionString` | PostgreSQL connection string | `"Host=vnext-postgres-headless;..."` |
 | `global.database.clickhouse.enabled` | ClickHouse integration | `false` |
 | `global.externalRedis.endpoint` | External Redis endpoint | `""` |
+| `global.dapr.pubsub.type` | Broker for the runtime pub/sub: `redis` or `kafka` | `"redis"` |
+| `global.externalKafka.endpoint` | Kafka brokers (comma-separated) | `""` |
+| `global.externalKafka.auth.*` | SASL credentials, inline or from the secret store | – |
+| `global.externalKafka.metadata.<host>` | Extra `pubsub.kafka` metadata per host (`orchestrator`, `execution`, `inbox`, `outbox`) | `[]` |
 | `global.resources.default` | One-size override for every component. Empty by default so the per-component `resourcesFallback` applies; see [SIZING_PROFILES.md](SIZING_PROFILES.md) | `{}` |
 | `global.dapr.redis.poolSize` | Shared Redis client pool per component; override per kind under `state`/`lock`/`pubsub` | `10` |
 | `global.dapr.redis.pubsub.concurrency` | Bound on in-flight pub/sub handler invocations | `5` |
