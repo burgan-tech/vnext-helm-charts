@@ -490,7 +490,7 @@ global:
     # are retrieved from Vault secrets.
     connectionString: "Host=vnext-postgres-headless;Port=5432;Database=vNext_WorkflowDb;Username=vnext;Password=changeme;"
     
-  
+ 
   # -----------------------------------------------------------------------------
   # Redis Configuration
   # Settings for Redis/cache connectivity
@@ -505,15 +505,25 @@ global:
   # External Kafka endpoint configuration
   externalKafka:
       endpoint: ""
-      # Extra pubsub.kafka metadata, as a list in the same {name, value} shape the Dapr
-      # component itself uses; each entry is appended to the component unchanged.
+      # Extra pubsub.kafka metadata PER HOST. With pubsub.type "kafka" the chart renders
+      # one component per host (<fullname>-pubsub-orchestrator / -execution /
+      # -worker-inbox / -worker-outbox), each scoped to that host's sidecar only, and
+      # sets the host's DAPR_PUBSUB_STORE_NAME to it. So e.g. each host can have its own
+      # consumerGroup / clientID. Keys: orchestrator | execution | inbox | outbox.
+      # Each key is a list in the same {name, value} shape the Dapr component uses;
+      # each entry is appended to that host's component unchanged.
       # - name MUST be the exact Dapr metadata name (case-sensitive: consumerID, not
       #   consumerId). A misspelled name renders fine and is silently ignored by Dapr.
       # - Use secretKeyRef ({name, key}) instead of value to read from the secret store.
       # - An entry whose value is "" is omitted, leaving the setting at Dapr's default.
       # - brokers, authType, saslUsername and saslPassword are rendered by the chart from
-      #   endpoint and auth below; listing them here fails the render.
-      metadata: [] # https://docs.dapr.io/reference/components-reference/supported-pubsub/setup-apache-kafka/
+      #   endpoint and auth below and are shared by all four; listing them here fails
+      #   the render.
+      metadata: # https://docs.dapr.io/reference/components-reference/supported-pubsub/setup-apache-kafka/
+        orchestrator: []
+        execution: []
+        inbox: []
+        outbox: []
         # - name: consumerGroup # Optional. Used for input bindings.
         #   value: "{namespace}"
         # - name: consumerID # Optional. If not supplied, runtime will create one.

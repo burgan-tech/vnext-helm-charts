@@ -1,10 +1,25 @@
 {{- include "vnext.validatePubsubType" . -}}
 {{- if eq .Values.global.dapr.pubsub.type "kafka" }}
+{{- $root := . }}
 {{- $kafka := .Values.global.externalKafka }}
+{{- /* One component per pubsub host so each gets its own metadata (consumerGroup,
+       clientID ...). component -> its key under global.externalKafka.metadata.
+       The component name must match vnext.pubsubStoreName, which feeds the host's
+       DAPR_PUBSUB_STORE_NAME. */}}
+{{- $hosts := list
+      (list "orchestrator"  "orchestrator")
+      (list "execution"     "execution")
+      (list "worker-inbox"  "inbox")
+      (list "worker-outbox" "outbox")
+}}
+{{- range $h := $hosts }}
+{{- $component := index $h 0 }}
+{{- $key := index $h 1 }}
+---
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: {{ include "vnext.fullname" . }}-pubsub
+  name: {{ include "vnext.pubsubStoreName" (dict "root" $root "component" $component) }}
 spec:
   type: pubsub.kafka
   version: v1
@@ -29,14 +44,14 @@ spec:
     {{- else }}
     value: {{ $kafka.auth.password | quote }}
     {{- end }}
-  {{- /* Every entry of externalKafka.metadata is emitted as a {name, value} or
+  {{- /* Every entry of externalKafka.metadata.<key> is emitted as a {name, value} or
        {name, secretKeyRef} pair; an entry whose value is "" is omitted. */}}
-  {{- range $i, $m := $kafka.metadata | default list }}
+  {{- range $i, $m := index ($kafka.metadata | default dict) $key | default list }}
   {{- if not $m.name }}
-  {{- fail (printf "global.externalKafka.metadata[%d].name is required" $i) }}
+  {{- fail (printf "global.externalKafka.metadata.%s[%d].name is required" $key $i) }}
   {{- end }}
   {{- if has $m.name (list "brokers" "authType" "saslUsername" "saslPassword") }}
-  {{- fail (printf "global.externalKafka.metadata[%d]: %q is rendered by the chart from endpoint/auth; remove it from metadata" $i $m.name) }}
+  {{- fail (printf "global.externalKafka.metadata.%s[%d]: %q is rendered by the chart from endpoint/auth; remove it from metadata" $key $i $m.name) }}
   {{- end }}
   {{- $v := $m.value }}
   {{- /* Helm reads YAML numbers as float64, so 1048576 would print as 1.048576e+06. */}}
@@ -51,6 +66,8 @@ spec:
   {{- end }}
   {{- end }}
 auth:
-  secretStore: {{ include "vnext.fullname" . }}-secret
-{{- include "vnext.daprRedisScopes" (dict "root" . "key" "pubsub") }}
+  secretStore: {{ include "vnext.fullname" $root }}-secret
+scopes:
+- {{ include "vnext.daprAppId" (dict "component" $component "appDomain" $root.Values.global.appDomain) | quote }}
+{{- end }}
 {{- end }}
