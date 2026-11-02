@@ -439,7 +439,7 @@ orchestrator:
       type: ClusterIP
       port: 3000
     envConfig:
-      VNEXT_COMPONENT_VERSION: "0.0.18"
+      VNEXT_COMPONENT_VERSION: "0.0.21"
       NPM_REGISTRY: "https://registry.npmjs.org/"
     ingress:
       enabled: false
