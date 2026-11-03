@@ -604,6 +604,9 @@ Usage: {{ include "vnext.validatePythonRuntime" . }}
 {{- if not .Values.global.dapr.enabled -}}
 {{- fail "pythonRuntime requires global.dapr.enabled: the orchestrator reaches it through Dapr service invocation" -}}
 {{- end -}}
+{{- if not .Values.pythonRuntime.dapr.enabled -}}
+{{- fail "pythonRuntime requires pythonRuntime.dapr.enabled: without its sidecar the orchestrator cannot reach it" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

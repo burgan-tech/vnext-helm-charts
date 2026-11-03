@@ -1432,8 +1432,8 @@ pythonRuntime:
     # value, so an override here needs nothing else.
     appId: ""
     protocol: "http"
-    # dapr.io/app-port — the runtime's listen port, same as pythonRuntime.service.port.
-    appPort: "8080"
+    # dapr.io/app-port is pythonRuntime.service.port (the runtime's listen port); it is not
+    # set separately, so the sidecar always forwards to the port the runtime listens on.
     # Override global.dapr.maxBodySize for this component. Empty = use global.
     maxBodySize: ""
     # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.

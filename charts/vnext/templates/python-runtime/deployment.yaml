@@ -6,12 +6,10 @@ metadata:
   name: {{ include "vnext.fullname" . }}-python-runtime
   labels:
     {{- include "vnext.componentLabels" (dict "context" . "component" "python-runtime") | nindent 4 }}
-  {{- if .Values.dapr.enabled }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "4"
     "helm.sh/hook-delete-policy": before-hook-creation
-  {{- end }}
 spec:
   {{- if not .Values.pythonRuntime.autoscaling.enabled }}
   replicas: {{ .Values.pythonRuntime.replicaCount }}
@@ -22,7 +20,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "vnext.daprAnnotations" (dict "dapr" .Values.pythonRuntime.dapr "enabled" .Values.global.dapr.enabled "component" "python-runtime" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "logAsJson" .Values.global.dapr.logAsJson "maxBodySize" (coalesce .Values.pythonRuntime.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.pythonRuntime.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- include "vnext.daprAnnotations" (dict "dapr" (merge (dict "appPort" (toString .Values.pythonRuntime.service.port)) (omit .Values.pythonRuntime.dapr "appPort")) "enabled" .Values.global.dapr.enabled "component" "python-runtime" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "logAsJson" .Values.global.dapr.logAsJson "maxBodySize" (coalesce .Values.pythonRuntime.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.pythonRuntime.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
         {{- with .Values.pythonRuntime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
