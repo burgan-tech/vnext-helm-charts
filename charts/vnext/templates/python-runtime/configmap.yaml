@@ -1,0 +1,18 @@
+{{- if .Values.pythonRuntime.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-python-runtime-config
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "python-runtime") | nindent 4 }}
+data:
+  APP_DOMAIN: {{ .Values.global.appDomain | quote }}
+  VNEXT_PYTHON_PORT: {{ .Values.pythonRuntime.service.port | quote }}
+  VNEXT_PYTHON_HANDLERS: {{ .Values.pythonRuntime.config.handlersPackage | quote }}
+  VNEXT_PYTHON_MAX_WORKERS: {{ .Values.pythonRuntime.config.maxWorkers | quote }}
+  VNEXT_PYTHON_MAX_REQUEST_BYTES: {{ .Values.pythonRuntime.config.maxRequestBytes | int64 | quote }}
+  VNEXT_PYTHON_MAX_OUTPUT_BYTES: {{ .Values.pythonRuntime.config.maxOutputBytes | int64 | quote }}
+  {{- range $key, $value := .Values.pythonRuntime.extraEnvConfig }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

@@ -150,6 +150,34 @@ jobs:
             --set openobserve.enabled=true \
             --debug > /dev/null
 
+      - name: Validate templates (python runtime)
+        run: |
+          # Off by default: no Python object and no AppId on the orchestrator.
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext --set global.appDomain=demo > /tmp/python-off.yaml
+          if grep -q -E 'python-runtime|Workflow__PythonRuntime__AppId' /tmp/python-off.yaml; then
+            echo "::error::pythonRuntime is disabled by default but rendered Python objects"
+            exit 1
+          fi
+          # Enabled without an image must fail fast with a values error.
+          if helm template test-release ${{ env.CHART_PATH }} --namespace vnext \
+               --set global.appDomain=demo --set pythonRuntime.enabled=true > /dev/null 2>&1; then
+            echo "::error::pythonRuntime.enabled without an image must fail"
+            exit 1
+          fi
+          # Enabled: Deployment + Service + NetworkPolicy, and the orchestrator points at its app-id.
+          helm template test-release ${{ env.CHART_PATH }} \
+            --namespace vnext --set global.appDomain=demo \
+            --set pythonRuntime.enabled=true \
+            --set pythonRuntime.image.repository=registry.example.com/demo/python-runtime \
+            --set pythonRuntime.image.tag=1.0.0 \
+            --set pythonRuntime.autoscaling.enabled=true \
+            --debug > /tmp/python-on.yaml
+          grep -q 'Workflow__PythonRuntime__AppId: "vnext-demo-python-runtime-app"' /tmp/python-on.yaml
+          grep -q 'dapr.io/app-id: "vnext-demo-python-runtime-app"' /tmp/python-on.yaml
+          grep -q 'kind: NetworkPolicy' /tmp/python-on.yaml
+          echo "OK: python runtime renders off/on as expected"
+
       - name: Validate templates (sizing profiles)
         run: |
           for p in nonprod low normal high; do

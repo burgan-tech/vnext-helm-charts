@@ -520,6 +520,35 @@ worker-outbox:
     SignalR__AppId: "http://localhost:6203"
 ```
 
+#### Python Runtime (opt-in)
+
+Runs the domain's own Python handlers for PythonTask (task type `23`). The orchestrator calls it
+directly over Dapr service invocation (`POST v1/invoke`, contract version 1); no vNext service
+carries Python. Disabled by default — a domain without Python tasks deploys nothing.
+
+```yaml
+pythonRuntime:
+  enabled: true
+  image:
+    # The DOMAIN's image, built FROM ghcr.io/burgan-tech/vnext/python-runtime:<version>
+    # with its handlers and pinned requirements. Required; there is no appVersion default.
+    repository: registry.example.com/core/python-runtime
+    tag: "1.4.0"
+  replicaCount: 1
+  config:
+    handlersPackage: handlers
+    maxWorkers: 4
+  networkPolicy:
+    enabled: true      # ingress only from this release's orchestrator pods
+```
+
+Enabling it also sets `Workflow__PythonRuntime__AppId` on the orchestrator to the runtime's app-id
+(`vnext-<appDomain>-python-runtime-app`, or `pythonRuntime.dapr.appId`). While it is disabled every
+Python task fails with 503. The pod runs as UID 65532 with a read-only root filesystem, a writable
+`/tmp` (`tmpSizeLimit`), no service-account token and health probes on `/v1/health`. Rendering fails
+when the image repository or its tag/digest is missing. Handler authoring and the contract:
+`docs/runtime/python-task.md` in the vnext repository.
+
 #### Custom Environment Variables
 
 All services support `extraEnvConfig` for adding custom environment variables:
