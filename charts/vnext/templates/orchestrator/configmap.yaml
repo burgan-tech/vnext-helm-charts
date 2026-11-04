@@ -30,6 +30,12 @@ data:
   # Execution service configuration
   ExecutionApi__AppId: {{ printf "vnext-%s-execution-app" ( .Values.global.appDomain ) | quote }}
 
+  {{- if .Values.pythonRuntime.enabled }}
+  # PythonTask (type 23) target: the domain's Python runtime, called directly over Dapr.
+  # Absent = no runtime; Python tasks then fail with 503.
+  Workflow__PythonRuntime__AppId: {{ .Values.pythonRuntime.dapr.appId | default (include "vnext.daprAppId" (dict "component" "python-runtime" "appDomain" .Values.global.appDomain)) | quote }}
+  {{- end }}
+
   APP_DOMAIN: {{ .Values.global.appDomain | quote }}
   DAPR_APP_ID: {{ printf "vnext-%s-app" ( .Values.global.appDomain ) | quote }}
 

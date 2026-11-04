@@ -152,6 +152,8 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-inbox-app" .ap
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-outbox-app" .appDomain) | quote }}
 {{- else if eq .component "db-migrator" }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-db-migrator-app" .appDomain) | quote }}
+{{- else if eq .component "python-runtime" }}
+dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-python-runtime-app" .appDomain) | quote }}
 {{- else }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | quote }}
 {{- end }}
@@ -585,6 +587,30 @@ moves into a rendered template.
 {{- end -}}
 
 {{/*
+Fail fast on an unusable Python runtime. The image is the DOMAIN's own (built FROM
+ghcr.io/burgan-tech/vnext/python-runtime), so neither its repository nor its version can default
+to the vNext chart's appVersion. Included by templates/python-runtime/deployment.yaml (like
+vnext.validatePubsubType), because _validate.tpl is a partial Helm never renders.
+Usage: {{ include "vnext.validatePythonRuntime" . }}
+*/}}
+{{- define "vnext.validatePythonRuntime" -}}
+{{- if .Values.pythonRuntime.enabled -}}
+{{- if not .Values.pythonRuntime.image.repository -}}
+{{- fail "pythonRuntime.image.repository is required when pythonRuntime.enabled (the domain's image built FROM ghcr.io/burgan-tech/vnext/python-runtime)" -}}
+{{- end -}}
+{{- if not (or .Values.pythonRuntime.image.tag .Values.pythonRuntime.image.digest) -}}
+{{- fail "pythonRuntime.image.tag or pythonRuntime.image.digest is required when pythonRuntime.enabled" -}}
+{{- end -}}
+{{- if not .Values.global.dapr.enabled -}}
+{{- fail "pythonRuntime requires global.dapr.enabled: the orchestrator reaches it through Dapr service invocation" -}}
+{{- end -}}
+{{- if not .Values.pythonRuntime.dapr.enabled -}}
+{{- fail "pythonRuntime requires pythonRuntime.dapr.enabled: without its sidecar the orchestrator cannot reach it" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Get Redis endpoint with fallback
 Generates comma-separated sentinel host list based on replicaCount
 Usage: {{ include "vnext.redisEndpoint" . }}
@@ -785,6 +811,8 @@ Usage: {{ include "vnext.daprAppId" (dict "component" "worker-inbox" "appDomain"
 {{- printf "vnext-%s-worker-outbox-app" .appDomain -}}
 {{- else if eq .component "db-migrator" -}}
 {{- printf "vnext-%s-db-migrator-app" .appDomain -}}
+{{- else if eq .component "python-runtime" -}}
+{{- printf "vnext-%s-python-runtime-app" .appDomain -}}
 {{- else -}}
 {{- printf "vnext-%s-app" .appDomain -}}
 {{- end -}}

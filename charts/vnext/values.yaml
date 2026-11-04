@@ -1399,6 +1399,134 @@ mcpServer:
   extraEnvConfig: {}
 
 # ==============================================================================
+# PYTHON RUNTIME CONFIGURATION (opt-in, per domain)
+# Runs the domain's own Python handlers for PythonTask (task type 23). The orchestrator
+# calls it directly over Dapr service invocation (POST v1/invoke, contract version 1);
+# no vNext service carries Python. Disabled by default: a domain without Python tasks
+# deploys nothing. See vnext docs/runtime/python-task.md for the contract.
+# ==============================================================================
+pythonRuntime:
+  # Enable the Python runtime for this domain. Also sets Workflow__PythonRuntime__AppId on
+  # the orchestrator; while disabled, every Python task fails with 503.
+  enabled: false
+
+  # Number of replicas. Calls share one process per pod and CPU-bound handlers are limited
+  # by the GIL: scale with replicas, not threads.
+  replicaCount: 1
+
+  # The DOMAIN's image, built FROM ghcr.io/burgan-tech/vnext/python-runtime:<version> with
+  # its handlers and pinned requirements. Required when enabled; there is no appVersion
+  # default because the image version is the domain's, not vNext's.
+  image:
+    repository: ""
+    tag: ""
+    digest: ""  # Image digest for immutable reference
+    pullPolicy: ""  # Uses global.imagePullPolicy if empty
+
+  # Override global settings if needed
+  imagePullSecrets: []
+
+  dapr:
+    enabled: true
+    # Empty = vnext-<appDomain>-python-runtime-app. The orchestrator is pointed at the same
+    # value, so an override here needs nothing else.
+    appId: ""
+    protocol: "http"
+    # dapr.io/app-port is pythonRuntime.service.port (the runtime's listen port); it is not
+    # set separately, so the sidecar always forwards to the port the runtime listens on.
+    # Override global.dapr.maxBodySize for this component. Empty = use global.
+    maxBodySize: ""
+    # Override global.dapr.httpMaxRequestSize for this component. Empty = use global.
+    httpMaxRequestSize: ""
+
+  podAnnotations:
+    dapr.io/config: appconfig
+  podLabels: {}
+
+  # The base image runs as UID/GID 65532 and needs no Kubernetes API access.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Empty = global.securityContext (drop ALL, read-only root filesystem).
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+
+  # Writable /tmp (emptyDir) for libraries that need scratch space on a read-only root.
+  tmpSizeLimit: 128Mi
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Empty = sized by global.resources.default when that is set, else by resourcesFallback
+  # below. Set a non-empty block here to override both.
+  resources: {}
+
+  # Chart-managed starting point; size it for the domain's heaviest handler.
+  resourcesFallback:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  livenessProbe:
+    httpGet:
+      path: /v1/health
+      port: http
+
+  readinessProbe:
+    httpGet:
+      path: /v1/health
+      port: http
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+  # Ingress NetworkPolicy: only this release's orchestrator pods (through their Dapr sidecar)
+  # may reach the runtime pods. Egress is not restricted — handlers may call their own
+  # dependencies. Requires a NetworkPolicy-capable CNI.
+  networkPolicy:
+    enabled: true
+    # Additional ingress rules (NetworkPolicyIngressRule), e.g. a Prometheus scraper on 9090.
+    extraIngress: []
+
+  volumes: []
+  volumeMounts: []
+  nodeSelector: {}
+  tolerations: []
+  # EMPTY ({}) = the chart's default preferred podAntiAffinity across nodes.
+  affinity: {}
+
+  # Runtime settings (rendered as VNEXT_PYTHON_* environment variables).
+  config:
+    # Package whose modules register the handlers.
+    handlersPackage: "handlers"
+    # Concurrent handler calls per pod.
+    maxWorkers: 4
+    # Request / response body limits in bytes. Keep the request limit within the Dapr body size.
+    maxRequestBytes: 4194304
+    maxOutputBytes: 4194304
+
+  # Additional environment variables for the runtime container (handler settings).
+  # Secrets do not belong here: read them through the Dapr secret store.
+  extraEnvConfig: {}
+
+# ==============================================================================
 # DB-MIGRATOR JOB CONFIGURATION
 # Db-Migrator creates and migrates database schemas for systems and flows.
 # ==============================================================================

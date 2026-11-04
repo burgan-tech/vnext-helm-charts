@@ -520,6 +520,36 @@ worker-outbox:
     SignalR__AppId: "http://localhost:6203"
 ```
 
+#### Python Runtime (isteğe bağlı)
+
+PythonTask (task tipi `23`) için domain'in kendi Python handler'larını çalıştırır. Orchestrator onu
+Dapr service invocation ile doğrudan çağırır (`POST v1/invoke`, contract sürümü 1); hiçbir vNext
+servisi Python taşımaz. Varsayılan olarak kapalıdır — Python task'ı olmayan bir domain ek bir şey
+deploy etmez.
+
+```yaml
+pythonRuntime:
+  enabled: true
+  image:
+    # DOMAIN'in image'ı: FROM ghcr.io/burgan-tech/vnext/python-runtime:<sürüm> üzerine
+    # handler'lar ve sabitlenmiş requirement'lar. Zorunlu; appVersion varsayılanı yoktur.
+    repository: registry.example.com/core/python-runtime
+    tag: "1.4.0"
+  replicaCount: 1
+  config:
+    handlersPackage: handlers
+    maxWorkers: 4
+  networkPolicy:
+    enabled: true      # yalnızca bu release'in orchestrator pod'larından ingress
+```
+
+Açıldığında orchestrator'a runtime'ın app-id'si `Workflow__PythonRuntime__AppId` olarak verilir
+(`vnext-<appDomain>-python-runtime-app` ya da `pythonRuntime.dapr.appId`). Kapalıyken her Python task'ı
+503 ile düşer. Pod UID 65532 ile, salt-okunur kök dosya sistemi, yazılabilir `/tmp` (`tmpSizeLimit`),
+service-account token'ı olmadan ve `/v1/health` probe'larıyla çalışır. Image repository'si ya da
+tag/digest'i eksikse render başarısız olur. Handler yazımı ve contract: vnext reposunda
+`docs/runtime/python-task.md`.
+
 #### Özel Ortam Değişkenleri
 
 Tüm servisler `extraEnvConfig` ile özel ortam değişkenleri eklemeyi destekler:

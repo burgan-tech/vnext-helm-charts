@@ -1,0 +1,19 @@
+{{- if .Values.pythonRuntime.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vnext.fullname" . }}-python-runtime
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app.kubernetes.io/component: python-runtime
+spec:
+  type: {{ .Values.pythonRuntime.service.type }}
+  ports:
+    - port: {{ .Values.pythonRuntime.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "vnext.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: python-runtime
+{{- end }}

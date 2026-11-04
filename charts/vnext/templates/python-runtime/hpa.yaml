@@ -1,0 +1,33 @@
+{{- if and .Values.pythonRuntime.enabled .Values.pythonRuntime.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "vnext.fullname" . }}-python-runtime
+  labels:
+    {{- include "vnext.labels" . | nindent 4 }}
+    app.kubernetes.io/component: python-runtime
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "vnext.fullname" . }}-python-runtime
+  minReplicas: {{ .Values.pythonRuntime.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.pythonRuntime.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.pythonRuntime.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.pythonRuntime.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.pythonRuntime.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.pythonRuntime.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,105 @@
+{{- include "vnext.validatePythonRuntime" . -}}
+{{- if .Values.pythonRuntime.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-python-runtime
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "python-runtime") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  {{- if not .Values.pythonRuntime.autoscaling.enabled }}
+  replicas: {{ .Values.pythonRuntime.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "python-runtime") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "vnext.daprAnnotations" (dict "dapr" (merge (dict "appPort" (toString .Values.pythonRuntime.service.port)) (omit .Values.pythonRuntime.dapr "appPort")) "enabled" .Values.global.dapr.enabled "component" "python-runtime" "appDomain" .Values.global.appDomain "globalProtocol" .Values.global.dapr.protocol "logAsJson" .Values.global.dapr.logAsJson "maxBodySize" (coalesce .Values.pythonRuntime.dapr.maxBodySize .Values.global.dapr.maxBodySize) "httpMaxRequestSize" (coalesce .Values.pythonRuntime.dapr.httpMaxRequestSize .Values.global.dapr.httpMaxRequestSize)) | nindent 8 }}
+        {{- with .Values.pythonRuntime.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        "checksum/config": {{ include (print $.Template.BasePath "/python-runtime/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "python-runtime") | nindent 8 }}
+        {{- with .Values.pythonRuntime.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (coalesce .Values.pythonRuntime.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      # Handlers never talk to the Kubernetes API; the Dapr sidecar mounts its own projected token.
+      automountServiceAccountToken: false
+      {{- with .Values.global.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      {{- with .Values.pythonRuntime.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}-python-runtime
+          image: {{ include "vnext.image" (dict "image" .Values.pythonRuntime.image "defaultTag" "") | quote }}
+          imagePullPolicy: {{ include "vnext.imagePullPolicy" (dict "component" .Values.pythonRuntime "global" .Values.global) }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "vnext.fullname" . }}-python-runtime-config
+          {{- $securityContext := include "vnext.securityContext" (dict "component" .Values.pythonRuntime "global" .Values.global) }}
+          {{- if $securityContext }}
+          securityContext:
+            {{- $securityContext | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.pythonRuntime.service.port }}
+              protocol: TCP
+          {{- if .Values.pythonRuntime.livenessProbe }}
+          livenessProbe:
+            {{- include "vnext.livenessProbe" (dict "probe" .Values.pythonRuntime.livenessProbe "global" .Values.global.probes.liveness) | nindent 12 }}
+          {{- end }}
+          {{- if .Values.pythonRuntime.readinessProbe }}
+          readinessProbe:
+            {{- include "vnext.readinessProbe" (dict "probe" .Values.pythonRuntime.readinessProbe "global" .Values.global.probes.readiness) | nindent 12 }}
+          {{- end }}
+          {{- $resources := include "vnext.resources" (dict "component" .Values.pythonRuntime "global" .Values.global) }}
+          {{- if $resources }}
+          resources:
+            {{- $resources | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.pythonRuntime.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.pythonRuntime.tmpSizeLimit }}
+        {{- with .Values.pythonRuntime.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.pythonRuntime.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.pythonRuntime.affinity }}
+      affinity:
+        {{- toYaml .Values.pythonRuntime.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        {{- include "vnext.defaultPodAntiAffinity" (dict "context" . "component" "python-runtime") | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pythonRuntime.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
