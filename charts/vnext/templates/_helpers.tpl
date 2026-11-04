@@ -152,6 +152,8 @@ dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-inbox-app" .ap
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-worker-outbox-app" .appDomain) | quote }}
 {{- else if eq .component "db-migrator" }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-db-migrator-app" .appDomain) | quote }}
+{{- else if eq .component "cron-relay" }}
+dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-cron-relay-app" .appDomain) | quote }}
 {{- else }}
 dapr.io/app-id: {{ .dapr.appId | default (printf "vnext-%s-app" .appDomain) | quote }}
 {{- end }}
@@ -282,6 +284,35 @@ Usage: {{ include "vnext.pubsubStoreName" (dict "root" . "component" "worker-inb
 {{- printf "%s-pubsub-%s" $full .component -}}
 {{- else -}}
 {{- printf "%s-pubsub" $full -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Cron relay (templates/cron-relay). Dapr's bindings.cron has no leader election: every
+sidecar that loads a cron component runs its own ticker, so scoping the components to
+the HPA-scaled orchestrator fires each tick once PER REPLICA. The relay is a single
+replica nginx whose sidecar is the only one that loads them; it forwards each tick to
+the orchestrator through Dapr service invocation, which delivers it to ONE replica.
+
+vnext.cronRelay.enabled -- "true" when there is something to relay and the relay is on.
+With cron-relay.enabled=false the components fall back to the orchestrator scope.
+Usage: {{ if include "vnext.cronRelay.enabled" . }}
+*/}}
+{{- define "vnext.cronRelay.enabled" -}}
+{{- if and .Values.global.cronBindingComponents (index .Values "cron-relay").enabled -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+App-id that loads the cron components: the relay when enabled, else the orchestrator.
+Usage: {{ include "vnext.cronBindingAppId" . }}
+*/}}
+{{- define "vnext.cronBindingAppId" -}}
+{{- if include "vnext.cronRelay.enabled" . -}}
+{{- (index .Values "cron-relay").dapr.appId | default (include "vnext.daprAppId" (dict "component" "cron-relay" "appDomain" .Values.global.appDomain)) -}}
+{{- else -}}
+{{- .Values.orchestrator.dapr.appId | default (include "vnext.daprAppId" (dict "component" "orchestrator" "appDomain" .Values.global.appDomain)) -}}
 {{- end -}}
 {{- end }}
 
@@ -785,6 +816,8 @@ Usage: {{ include "vnext.daprAppId" (dict "component" "worker-inbox" "appDomain"
 {{- printf "vnext-%s-worker-outbox-app" .appDomain -}}
 {{- else if eq .component "db-migrator" -}}
 {{- printf "vnext-%s-db-migrator-app" .appDomain -}}
+{{- else if eq .component "cron-relay" -}}
+{{- printf "vnext-%s-cron-relay-app" .appDomain -}}
 {{- else -}}
 {{- printf "vnext-%s-app" .appDomain -}}
 {{- end -}}

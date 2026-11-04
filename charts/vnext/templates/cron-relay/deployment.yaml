@@ -1,0 +1,99 @@
+{{- if include "vnext.cronRelay.enabled" . }}
+{{- $relay := index .Values "cron-relay" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vnext.fullname" . }}-cron-relay
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "cron-relay") | nindent 4 }}
+spec:
+  # Exactly one replica, never autoscaled: each running relay sidecar fires every cron
+  # component once, so a second pod means every schedule starts twice.
+  replicas: 1
+  # Recreate, not RollingUpdate: a rolling update briefly runs the old and new pod side by
+  # side, and every tick in that window would be delivered twice.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vnext.componentSelectorLabels" (dict "context" . "component" "cron-relay") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "vnext.daprAnnotations" (dict "dapr" $relay.dapr "enabled" .Values.global.dapr.enabled "component" "cron-relay" "appDomain" .Values.global.appDomain "globalProtocol" "http" "logAsJson" .Values.global.dapr.logAsJson) | nindent 8 }}
+        {{- with $relay.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        "checksum/config": {{ include (print $.Template.BasePath "/cron-relay/configmap.yaml") . | sha256sum }}
+        {{- /* A sidecar only reads its components at startup: restart the relay when a
+               schedule is added, changed or removed. */}}
+        "checksum/cron-components": {{ include (print $.Template.BasePath "/common/common-dapr-components/vnext-cron-binding-template.yaml") . | sha256sum }}
+      labels:
+        {{- include "vnext.componentLabels" (dict "context" . "component" "cron-relay") | nindent 8 }}
+        {{- with $relay.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (coalesce $relay.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vnext.serviceAccountName" . }}
+      {{- with .Values.global.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      {{- with $relay.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cron-relay
+          image: {{ include "vnext.image" (dict "image" $relay.image "defaultTag" "") }}
+          imagePullPolicy: {{ include "vnext.imagePullPolicy" (dict "component" $relay "global" .Values.global) }}
+          {{- $securityContext := include "vnext.securityContext" (dict "component" $relay "global" .Values.global) }}
+          {{- if $securityContext }}
+          securityContext:
+            {{- $securityContext | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $relay.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          {{- with $relay.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "vnext.fullname" . }}-cron-relay-config
+        - name: tmp
+          emptyDir: {}
+      {{- with $relay.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $relay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $relay.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

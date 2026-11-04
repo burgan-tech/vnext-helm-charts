@@ -1,0 +1,49 @@
+{{- if include "vnext.cronRelay.enabled" . }}
+{{- $orchestratorAppId := .Values.orchestrator.dapr.appId | default (include "vnext.daprAppId" (dict "component" "orchestrator" "appDomain" .Values.global.appDomain)) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vnext.fullname" . }}-cron-relay-config
+  labels:
+    {{- include "vnext.componentLabels" (dict "context" . "component" "cron-relay") | nindent 4 }}
+data:
+  # Full nginx.conf so every writable path lands in /tmp (the root filesystem is read-only).
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+
+    events {
+      worker_connections 256;
+    }
+
+    http {
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path       /tmp/proxy_temp;
+      fastcgi_temp_path     /tmp/fastcgi_temp;
+      uwsgi_temp_path       /tmp/uwsgi_temp;
+      scgi_temp_path        /tmp/scgi_temp;
+
+      log_format relay '$time_iso8601 $request_method $request_uri -> $status $upstream_status ${request_time}s';
+      access_log /dev/stdout relay;
+
+      server {
+        listen {{ (index .Values "cron-relay").port }};
+
+        location = /healthz {
+          access_log off;
+          return 200;
+        }
+
+        # The sidecar POSTs each tick to the component's `route`. Forward it unchanged --
+        # path, query string (scheduleId, seed data) and the readTimeUTC header -- to the
+        # orchestrator through this pod's own sidecar, which delivers it to ONE replica.
+        location / {
+          proxy_pass http://127.0.0.1:{{ (index .Values "cron-relay").daprHttpPort }}/v1.0/invoke/{{ $orchestratorAppId }}/method$request_uri;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_read_timeout {{ (index .Values "cron-relay").proxyReadTimeout }};
+        }
+      }
+    }
+{{- end }}
