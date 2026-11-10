@@ -82,9 +82,14 @@ spec:
                 URL="{{ $repo.url }}"
                 TOKEN="${PLUGIN_TOKEN_{{ $i }}:-}"
                 echo "Searching repo: $URL{{ with $repo.ref }} @ {{ . }}{{ end }}"
-                if [ -n "$TOKEN" ]; then URL=$(printf '%s' "$URL" | sed -E "s#^(https?://)#\1${TOKEN}@#"); fi
                 rm -rf /tmp/plugin-src
-                git clone --depth 1 {{ with $repo.ref }}--branch "{{ . }}" {{ end }}"$URL" /tmp/plugin-src
+                if [ -n "$TOKEN" ]; then
+                  AUTH=$(printf ':%s' "$TOKEN" | base64 | tr -d '\n')
+                  git -c http.extraHeader="Authorization: Basic $AUTH" \
+                    clone --depth 1 --branch "master" "$URL" /tmp/plugin-src
+                else
+                  git clone --depth 1 --branch "master" "$URL" /tmp/plugin-src
+                fi
                 SRC="/tmp/plugin-src{{ with $repo.subPath }}/{{ . }}{{ end }}"
                 for name in $NEED; do
                   found=$(find "$SRC" -type f -name "$name" 2>/dev/null | head -n 1 || true)
